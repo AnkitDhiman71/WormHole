@@ -91,78 +91,87 @@ function connect() {
         cleanHeaders['host'] = `localhost:${targetPort}`;
         delete cleanHeaders['connection'];
 
-        const localReqOptions = {
-          hostname: '127.0.0.1',
-          port: targetPort,
-          path: reqPath,
-          method: method,
-          headers: cleanHeaders,
-        };
+        function attemptRequest(targetHost) {
+          const localReqOptions = {
+            hostname: targetHost,
+            port: targetPort,
+            path: reqPath,
+            method: method,
+            headers: cleanHeaders,
+          };
 
-        const localReq = http.request(localReqOptions, localRes => {
-          const resChunks = [];
-          localRes.on('data', chunk => resChunks.push(chunk));
-          localRes.on('end', () => {
+          const localReq = http.request(localReqOptions, localRes => {
+            const resChunks = [];
+            localRes.on('data', chunk => resChunks.push(chunk));
+            localRes.on('end', () => {
+              const duration = Date.now() - startTime;
+              const resBody = Buffer.concat(resChunks);
+
+              // Log activity to terminal
+              const timestamp = new Date().toLocaleTimeString();
+              console.log(
+                `  [${colors.dim}${timestamp}${colors.reset}] ` +
+                `${colors.bright}${method.padEnd(6)}${colors.reset} ` +
+                `${reqPath.padEnd(25)} ` +
+                `${formatStatus(localRes.statusCode)} ` +
+                `${colors.dim}(${duration}ms, ${resBody.length} bytes)${colors.reset}`
+              );
+
+              // Reply back to relay
+              ws.send(JSON.stringify({
+                type: 'response',
+                requestId,
+                statusCode: localRes.statusCode,
+                headers: localRes.headers,
+                body: resBody.toString('base64'),
+              }));
+            });
+          });
+
+          localReq.on('error', err => {
+            if (targetHost === 'localhost' && err.code === 'ECONNREFUSED') {
+              // Try IPv4 127.0.0.1 fallback
+              return attemptRequest('127.0.0.1');
+            }
+
             const duration = Date.now() - startTime;
-            const resBody = Buffer.concat(resChunks);
-
-            // Log activity to terminal
-            const timestamp = new Date().toLocaleTimeString();
             console.log(
-              `  [${colors.dim}${timestamp}${colors.reset}] ` +
-              `${colors.bright}${method.padEnd(6)}${colors.reset} ` +
+              `  [${colors.dim}${new Date().toLocaleTimeString()}${colors.reset}] ` +
+              `${colors.red}${method.padEnd(6)}${colors.reset} ` +
               `${reqPath.padEnd(25)} ` +
-              `${formatStatus(localRes.statusCode)} ` +
-              `${colors.dim}(${duration}ms, ${resBody.length} bytes)${colors.reset}`
+              `${colors.red}502 Bad Gateway (${err.code || err.message})${colors.reset} ` +
+              `${colors.dim}(${duration}ms)${colors.reset}`
             );
 
-            // Reply back to relay
+            const errorHtml = `
+              <!DOCTYPE html>
+              <html>
+              <body style="font-family: sans-serif; background: #09090b; color: #f4f4f5; padding: 40px; text-align: center;">
+                <h2 style="color: #ef4444;">👻 502 Bad Gateway: Local Server Unreachable</h2>
+                <p>WormHole could not connect to <code>http://localhost:${targetPort}</code>.</p>
+                <p style="color: #a1a1aa; font-size: 14px;">Error: <code>${err.message}</code></p>
+                <p style="color: #71717a; font-size: 13px;">Make sure your local development server is running on port ${targetPort}!</p>
+              </body>
+              </html>
+            `;
+
             ws.send(JSON.stringify({
               type: 'response',
               requestId,
-              statusCode: localRes.statusCode,
-              headers: localRes.headers,
-              body: resBody.toString('base64'),
+              statusCode: 502,
+              headers: { 'content-type': 'text/html; charset=utf-8' },
+              body: Buffer.from(errorHtml).toString('base64'),
             }));
           });
-        });
 
-        localReq.on('error', err => {
-          const duration = Date.now() - startTime;
-          console.log(
-            `  [${colors.dim}${new Date().toLocaleTimeString()}${colors.reset}] ` +
-            `${colors.red}${method.padEnd(6)}${colors.reset} ` +
-            `${reqPath.padEnd(25)} ` +
-            `${colors.red}502 Bad Gateway (${err.code || err.message})${colors.reset} ` +
-            `${colors.dim}(${duration}ms)${colors.reset}`
-          );
-
-          const errorHtml = `
-            <!DOCTYPE html>
-            <html>
-            <body style="font-family: sans-serif; background: #09090b; color: #f4f4f5; padding: 40px; text-align: center;">
-              <h2 style="color: #ef4444;">👻 502 Bad Gateway: Local Server Unreachable</h2>
-              <p>PortGhost could not connect to <code>http://localhost:${targetPort}</code>.</p>
-              <p style="color: #a1a1aa; font-size: 14px;">Error: <code>${err.message}</code></p>
-              <p style="color: #71717a; font-size: 13px;">Make sure your local development server is running on port ${targetPort}!</p>
-            </body>
-            </html>
-          `;
-
-          ws.send(JSON.stringify({
-            type: 'response',
-            requestId,
-            statusCode: 502,
-            headers: { 'content-type': 'text/html; charset=utf-8' },
-            body: Buffer.from(errorHtml).toString('base64'),
-          }));
-        });
-
-        // If request has a body (e.g. POST/PUT), write it
-        if (body) {
-          localReq.write(Buffer.from(body, 'base64'));
+          // If request has a body (e.g. POST/PUT), write it
+          if (body) {
+            localReq.write(Buffer.from(body, 'base64'));
+          }
+          localReq.end();
         }
-        localReq.end();
+
+        attemptRequest('localhost');
       }
     } catch (err) {
       console.error('Error handling message from relay:', err);
