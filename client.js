@@ -1,11 +1,11 @@
+#!/usr/bin/env node
 const WebSocket = require('ws');
 const http = require('http');
-const url = require('url');
 
 // Parse CLI flags
 const args = process.argv.slice(2);
 let targetPort = 3000;
-let serverUrl = 'http://localhost:8080';
+let serverUrl = process.env.WORMHOLE_SERVER || 'https://wormhole-c66l.onrender.com';
 let requestedName = '';
 
 for (let i = 0; i < args.length; i++) {

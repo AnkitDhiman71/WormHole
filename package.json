@@ -4,23 +4,35 @@
   "description": "Zero-config localhost tunneling & preview engine for developers",
   "main": "client.js",
   "bin": {
+    "wormhole-tunnel": "./client.js",
     "wormhole": "./client.js"
   },
   "scripts": {
+    "start": "node client.js",
     "server": "node server.js",
     "tunnel": "node client.js",
     "demo": "node demo-app.js",
     "test": "node test-e2e.js"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AnkitDhiman71/WormHole.git"
+  },
   "keywords": [
-    "ngrok-alternative",
     "tunnel",
     "localhost",
+    "ngrok-alternative",
     "reverse-proxy",
-    "developer-tools"
+    "developer-tools",
+    "preview",
+    "websocket"
   ],
-  "author": "",
+  "author": "Ankit Dhiman",
   "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/AnkitDhiman71/WormHole/issues"
+  },
+  "homepage": "https://github.com/AnkitDhiman71/WormHole#readme",
   "dependencies": {
     "ws": "^8.18.0"
   }
