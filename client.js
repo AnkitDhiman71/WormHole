@@ -7,6 +7,7 @@ const args = process.argv.slice(2);
 let targetPort = 3000;
 let serverUrl = process.env.WORMHOLE_SERVER || 'https://wormhole-c66l.onrender.com';
 let requestedName = '';
+let pin = '';
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--port' || args[i] === '-p') {
@@ -15,6 +16,8 @@ for (let i = 0; i < args.length; i++) {
     serverUrl = args[++i];
   } else if (args[i] === '--name' || args[i] === '-n') {
     requestedName = args[++i];
+  } else if (args[i] === '--pin') {
+    pin = args[++i];
   } else if (!isNaN(parseInt(args[i], 10))) {
     targetPort = parseInt(args[i], 10);
   }
@@ -34,7 +37,7 @@ const sessionName = (requestedName || generateSlug()).toLowerCase().replace(/[^a
 
 // Convert HTTP server URL to WebSocket URL with sticky session name & port metadata
 const wsServerUrl = serverUrl.replace(/^http/, 'ws') + 
-  `/tunnel-connect?name=${encodeURIComponent(sessionName)}&targetPort=${targetPort}`;
+  `/tunnel-connect?name=${encodeURIComponent(sessionName)}&targetPort=${targetPort}&pin=${encodeURIComponent(pin)}`;
 
 // ANSI Colors for terminal output
 const colors = {
@@ -88,6 +91,9 @@ function connect() {
         console.log(`  -------------------------------------------------------------`);
         console.log(`  ${colors.bright}Local Target:${colors.reset}  ${colors.yellow}http://localhost:${targetPort}${colors.reset}`);
         console.log(`  ${colors.bright}Public URL:${colors.reset}    ${colors.cyan}${colors.bright}${publicUrl}${colors.reset}`);
+        if (pin) {
+          console.log(`  ${colors.bright}Protection:${colors.reset}    ${colors.yellow}🔒 PIN Passcode Enabled (${pin})${colors.reset}`);
+        }
         console.log(`  ${colors.bright}Relay Server:${colors.reset}  ${serverUrl}`);
         console.log(`  -------------------------------------------------------------`);
         console.log(`  ${colors.dim}Forwarding live requests to localhost:${targetPort}...${colors.reset}\n`);

@@ -33,6 +33,39 @@ const server = http.createServer((req, res) => {
     return res.end();
   }
 
+  // 1.5 API Endpoint: Verify PIN Passcode
+  if (parsedUrl.pathname.startsWith('/api/verify-pin/')) {
+    const targetTunnelId = parsedUrl.pathname.replace('/api/verify-pin/', '').trim();
+    const tunnel = tunnels.get(targetTunnelId);
+
+    if (!tunnel) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ success: false, message: 'Tunnel not found or expired' }));
+    }
+
+    const chunks = [];
+    req.on('data', c => chunks.push(c));
+    req.on('end', () => {
+      try {
+        const { pin: enteredPin } = JSON.parse(Buffer.concat(chunks).toString() || '{}');
+        if (enteredPin && tunnel.pin && enteredPin.toString() === tunnel.pin.toString()) {
+          res.writeHead(200, {
+            'Content-Type': 'application/json',
+            'Set-Cookie': `wormhole_pin_${targetTunnelId}=authorized; Path=/; SameSite=Lax; Max-Age=86400`,
+          });
+          return res.end(JSON.stringify({ success: true, redirect: `/t/${targetTunnelId}/` }));
+        } else {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ success: false, message: 'Access Denied: Invalid Passcode' }));
+        }
+      } catch (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: false, message: 'Malformed verification payload' }));
+      }
+    });
+    return;
+  }
+
   // 2. Dashboard Homepage
   if (parsedUrl.pathname === '/' || parsedUrl.pathname === '/index.html') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -157,6 +190,17 @@ const server = http.createServer((req, res) => {
     `);
   }
 
+  // 3.5 PIN Protection Gate
+  if (tunnel.pin) {
+    const authCookie = `wormhole_pin_${tunnelId}=authorized`;
+    const hasPinAuth = req.headers.cookie && req.headers.cookie.includes(authCookie);
+
+    if (!hasPinAuth) {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return res.end(renderCyberpunkKeypad(tunnelId));
+    }
+  }
+
   // 4. Collect Incoming Request Body
   const bodyChunks = [];
   req.on('data', chunk => bodyChunks.push(chunk));
@@ -215,6 +259,7 @@ wss.on('connection', (ws, req) => {
   const parsed = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   let requestedName = parsed.searchParams.get('name') || '';
   const targetPort = parsed.searchParams.get('targetPort') || '';
+  const pin = parsed.searchParams.get('pin') || '';
   
   requestedName = requestedName.toLowerCase().replace(/[^a-z0-9_-]/g, '');
   if (!requestedName) {
@@ -234,6 +279,7 @@ wss.on('connection', (ws, req) => {
   const tunnelData = {
     ws,
     targetPort,
+    pin,
     stats: { requests: 0, bytes: 0 },
     createdAt: Date.now(),
     isAlive: true,
@@ -343,3 +389,244 @@ server.listen(PORT, () => {
   console.log(`  Dashboard: http://localhost:${PORT}/`);
   console.log(`====================================================`);
 });
+
+
+function renderCyberpunkKeypad(tunnelId) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🔒 Security Gateway | WormHole</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    body {
+      background: #09090b;
+      color: #f4f4f5;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      overflow: hidden;
+    }
+    .grid-bg {
+      position: fixed;
+      inset: 0;
+      background-image: 
+        linear-gradient(rgba(34, 197, 94, 0.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(34, 197, 94, 0.05) 1px, transparent 1px);
+      background-size: 32px 32px;
+      z-index: 0;
+    }
+    .card {
+      position: relative;
+      z-index: 10;
+      background: rgba(18, 18, 20, 0.85);
+      backdrop-filter: blur(16px);
+      border: 1px solid rgba(39, 39, 42, 0.8);
+      box-shadow: 0 0 50px rgba(34, 197, 94, 0.1), 0 25px 50px rgba(0, 0, 0, 0.8);
+      border-radius: 20px;
+      padding: 36px 32px;
+      max-width: 380px;
+      width: 100%;
+      text-align: center;
+      transition: transform 0.2s;
+    }
+    .shake {
+      animation: shake 0.4s cubic-bezier(.36,.07,.19,.97) both;
+    }
+    @keyframes shake {
+      10%, 90% { transform: translate3d(-2px, 0, 0); }
+      20%, 80% { transform: translate3d(4px, 0, 0); }
+      30%, 50%, 70% { transform: translate3d(-6px, 0, 0); }
+      40%, 60% { transform: translate3d(6px, 0, 0); }
+    }
+    .icon-badge {
+      width: 56px;
+      height: 56px;
+      margin: 0 auto 16px;
+      border-radius: 50%;
+      background: rgba(34, 197, 94, 0.1);
+      border: 1px solid rgba(34, 197, 94, 0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      box-shadow: 0 0 20px rgba(34, 197, 94, 0.2);
+    }
+    h2 { font-size: 20px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 6px; }
+    .tunnel-badge {
+      font-size: 13px;
+      color: #38bdf8;
+      background: #27272a;
+      padding: 4px 10px;
+      border-radius: 6px;
+      display: inline-block;
+      margin-bottom: 24px;
+      font-family: monospace;
+    }
+    .dots-container {
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+    .dot {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      border: 2px solid #3f3f46;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .dot.filled {
+      background: #22c55e;
+      border-color: #22c55e;
+      box-shadow: 0 0 12px #22c55e;
+      transform: scale(1.15);
+    }
+    .keypad {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .key {
+      background: #18181b;
+      border: 1px solid #27272a;
+      color: #f4f4f5;
+      font-size: 20px;
+      font-weight: 600;
+      padding: 16px 0;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .key:hover {
+      background: #27272a;
+      border-color: #3f3f46;
+      transform: translateY(-2px);
+    }
+    .key:active {
+      transform: scale(0.95);
+      background: rgba(34, 197, 94, 0.15);
+      border-color: #22c55e;
+    }
+    .key-action {
+      font-size: 14px;
+      color: #a1a1aa;
+    }
+    .error-msg {
+      color: #ef4444;
+      font-size: 13px;
+      font-weight: 500;
+      min-height: 20px;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div class="grid-bg"></div>
+  <div class="card" id="card">
+    <div class="icon-badge">🔒</div>
+    <h2>Passcode Protected</h2>
+    <div class="tunnel-badge">/${tunnelId}/</div>
+    <div class="dots-container">
+      <div class="dot" id="dot0"></div>
+      <div class="dot" id="dot1"></div>
+      <div class="dot" id="dot2"></div>
+      <div class="dot" id="dot3"></div>
+    </div>
+    <div class="keypad">
+      <button class="key" onclick="press('1')">1</button>
+      <button class="key" onclick="press('2')">2</button>
+      <button class="key" onclick="press('3')">3</button>
+      <button class="key" onclick="press('4')">4</button>
+      <button class="key" onclick="press('5')">5</button>
+      <button class="key" onclick="press('6')">6</button>
+      <button class="key" onclick="press('7')">7</button>
+      <button class="key" onclick="press('8')">8</button>
+      <button class="key" onclick="press('9')">9</button>
+      <button class="key key-action" onclick="clearPin()">CLR</button>
+      <button class="key" onclick="press('0')">0</button>
+      <button class="key key-action" onclick="backspace()">⌫</button>
+    </div>
+    <div class="error-msg" id="errorMsg"></div>
+  </div>
+  <script>
+    let currentPin = '';
+    const tunnelId = '${tunnelId}';
+
+    function updateDots() {
+      for (let i = 0; i < 4; i++) {
+        const dot = document.getElementById('dot' + i);
+        if (i < currentPin.length) {
+          dot.classList.add('filled');
+        } else {
+          dot.classList.remove('filled');
+        }
+      }
+    }
+
+    async function press(num) {
+      if (currentPin.length >= 4) return;
+      currentPin += num;
+      updateDots();
+      document.getElementById('errorMsg').innerText = '';
+
+      if (currentPin.length === 4) {
+        verifyPin();
+      }
+    }
+
+    function clearPin() {
+      currentPin = '';
+      updateDots();
+      document.getElementById('errorMsg').innerText = '';
+    }
+
+    function backspace() {
+      if (currentPin.length > 0) {
+        currentPin = currentPin.slice(0, -1);
+        updateDots();
+        document.getElementById('errorMsg').innerText = '';
+      }
+    }
+
+    async function verifyPin() {
+      try {
+        const res = await fetch('/api/verify-pin/' + tunnelId, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pin: currentPin })
+        });
+        const data = await res.json();
+        if (data.success) {
+          window.location.reload();
+        } else {
+          showError(data.message || 'Access Denied: Invalid Passcode');
+        }
+      } catch (err) {
+        showError('Network Error verifying passcode');
+      }
+    }
+
+    function showError(msg) {
+      const card = document.getElementById('card');
+      card.classList.add('shake');
+      setTimeout(() => card.classList.remove('shake'), 450);
+      document.getElementById('errorMsg').innerText = msg;
+      currentPin = '';
+      updateDots();
+    }
+
+    window.addEventListener('keydown', e => {
+      if (e.key >= '0' && e.key <= '9') press(e.key);
+      else if (e.key === 'Backspace') backspace();
+      else if (e.key === 'Escape') clearPin();
+    });
+  </script>
+</body>
+</html>`;
+}
