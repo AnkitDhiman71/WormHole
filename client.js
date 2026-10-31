@@ -20,8 +20,21 @@ for (let i = 0; i < args.length; i++) {
   }
 }
 
-// Convert HTTP server URL to WebSocket URL
-const wsServerUrl = serverUrl.replace(/^http/, 'ws') + `/tunnel-connect?name=${encodeURIComponent(requestedName)}`;
+// Generate a stable session slug if no name provided
+const ADJECTIVES = ['swift', 'silent', 'cosmic', 'hyper', 'shadow', 'neon', 'cyber', 'quantum', 'wild', 'stealth'];
+const NOUNS = ['fox', 'lynx', 'falcon', 'ghost', 'titan', 'wolf', 'viper', 'matrix', 'beacon', 'drifter'];
+function generateSlug() {
+  const adj = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)];
+  const noun = NOUNS[Math.floor(Math.random() * NOUNS.length)];
+  const num = Math.floor(10 + Math.random() * 90);
+  return `${adj}-${noun}-${num}`;
+}
+
+const sessionName = (requestedName || generateSlug()).toLowerCase().replace(/[^a-z0-9_-]/g, '');
+
+// Convert HTTP server URL to WebSocket URL with sticky session name & port metadata
+const wsServerUrl = serverUrl.replace(/^http/, 'ws') + 
+  `/tunnel-connect?name=${encodeURIComponent(sessionName)}&targetPort=${targetPort}`;
 
 // ANSI Colors for terminal output
 const colors = {

@@ -42,8 +42,9 @@ const server = http.createServer((req, res) => {
         <li style="margin: 12px 0; padding: 16px; background: #18181b; border: 1px solid #27272a; border-radius: 10px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
           <div>
             <strong style="color: #22c55e; font-size: 16px;">${id}</strong>
+            ${t.targetPort ? `<span style="background: #27272a; color: #38bdf8; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin-left: 8px; font-family: monospace;">&rarr; localhost:${t.targetPort}</span>` : ''}
             <span style="color: #71717a; margin-left: 10px; font-size: 12px;">Active since ${new Date(t.createdAt).toLocaleTimeString()}</span>
-            <div style="color: #a1a1aa; font-size: 13px; margin-top: 4px;">Served ${t.stats.requests} requests</div>
+            <div style="color: #a1a1aa; font-size: 13px; margin-top: 4px;">Served ${t.stats.requests} requests (${(t.stats.bytes / 1024).toFixed(1)} KB)</div>
           </div>
           <div style="display: flex; gap: 8px;">
             <a href="${liveUrl}" target="_blank" style="background: #3b82f6; color: white; text-decoration: none; padding: 8px 16px; border-radius: 6px; font-weight: bold; font-size: 13px;">Open Tunnel &rarr;</a>
@@ -212,16 +213,27 @@ server.on('upgrade', (req, socket, head) => {
 
 wss.on('connection', (ws, req) => {
   const parsed = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-  let requestedName = parsed.searchParams.get('name') || generateSlug();
+  let requestedName = parsed.searchParams.get('name') || '';
+  const targetPort = parsed.searchParams.get('targetPort') || '';
   
   requestedName = requestedName.toLowerCase().replace(/[^a-z0-9_-]/g, '');
-  if (!requestedName || tunnels.has(requestedName)) {
-    requestedName = `${requestedName ? requestedName + '-' : ''}${generateSlug()}`;
+  if (!requestedName) {
+    requestedName = generateSlug();
+  }
+
+  // If tunnel already exists (e.g. client reconnected or restarted),
+  // kick the old stale socket and reclaim the same link cleanly!
+  if (tunnels.has(requestedName)) {
+    const oldTunnel = tunnels.get(requestedName);
+    try { oldTunnel.ws.terminate(); } catch (e) {}
+    tunnels.delete(requestedName);
+    console.log(`[~] Reclaimed existing tunnel session: ${requestedName}`);
   }
 
   const tunnelId = requestedName;
   const tunnelData = {
     ws,
+    targetPort,
     stats: { requests: 0, bytes: 0 },
     createdAt: Date.now(),
     isAlive: true,
