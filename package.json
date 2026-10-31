@@ -4,8 +4,8 @@
   "description": "Zero-config localhost tunneling & preview engine for developers",
   "main": "client.js",
   "bin": {
-    "wormhole-tunnel": "./client.js",
-    "wormhole": "./client.js"
+    "wormhole-tunnel": "client.js",
+    "wormhole": "client.js"
   },
   "scripts": {
     "start": "node client.js",
