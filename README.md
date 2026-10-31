@@ -1,16 +1,17 @@
-# 👻 PortGhost
+# 🌀 WormHole
 > **Instant, zero-config localhost tunneling & preview engine for developers.**  
 > Share your local projects (`localhost:3000`, `localhost:5173`, etc.) with friends and clients anywhere in the world without deploying.
 
 ---
 
-## ⚡ Why PortGhost?
+## ⚡ Why WormHole?
 
-- **No account needed**: No tokens, no auth keys, no sign-ups.
+- **Zero account needed**: No tokens, no auth keys, no sign-ups.
 - **No session time limits**: Keep your tunnel running as long as you want.
 - **No warning intercept screens**: Direct, clean HTTP and JSON API proxying.
 - **Live Terminal Telemetry**: Real-time HTTP method, path, response codes, and roundtrip latency logs in your terminal.
 - **Binary & Media Safe**: Accurately streams base64-buffered images, assets, and JSON bodies.
+- **SPA & Referer Smart Routing**: Works seamlessly with modern React, Vite, and Next.js SPAs.
 
 ---
 
@@ -20,10 +21,10 @@
 [ Developer Laptop: localhost:3000 ]
                  │
                  ▼
-     [ PortGhost Client (CLI) ]
+     [ WormHole Client (CLI) ]
                  │  (Bidirectional WebSocket)
                  ▼
-     [ PortGhost Relay Server ]  ◄──── [ Remote Friend / Mobile Phone ]
+     [ WormHole Relay Server ]  ◄──── [ Remote Friend / Mobile Phone ]
 ```
 
 1. **Relay Server (`server.js`)**: Runs on a public server or host. Manages incoming HTTP requests and assigns tunnels.
@@ -64,12 +65,12 @@ Your tunnel is instantly live at:
 ## 🌐 Deploying Relay to the Internet (For Worldwide Access)
 
 To let friends on external Wi-Fi networks access your links:
-1. Deploy `server.js` to any free cloud host:
-   - **Render** (Web Service, `npm run server`)
-   - **Railway** / **Fly.io** / **VPS**
+1. Deploy `server.js` to any free cloud host like **Render**:
+   - Web Service, Runtime: `Node`
+   - Build Command: `npm install`
+   - Start Command: `node server.js`
 2. On your laptop, point the client to your deployed relay:
    ```bash
-   node client.js --port 3000 --server https://your-relay.onrender.com
+   node client.js --port 3000 --server https://your-wormhole.onrender.com --name my-project
    ```
-3. Share the generated link `https://your-relay.onrender.com/t/<tunnel-id>/` with anyone in the world!
-
+3. Share the generated link `https://your-wormhole.onrender.com/t/my-project/` with anyone in the world!
