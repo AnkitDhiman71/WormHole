@@ -3,7 +3,7 @@ const { WebSocketServer } = require('ws');
 const crypto = require('crypto');
 
 const PORT = process.env.PORT || 8080;
-const tunnels = new Map(); // tunnelId -> { ws, stats: { requests: 0, bytes: 0 }, createdAt }
+const tunnels = new Map(); // tunnelId -> { ws, stats: { requests: 0, bytes: 0 }, createdAt, isAlive: true }
 const pendingRequests = new Map(); // requestId -> { res, timeout }
 
 const ADJECTIVES = ['swift', 'silent', 'cosmic', 'hyper', 'shadow', 'neon', 'cyber', 'quantum', 'wild', 'stealth'];
@@ -19,19 +19,36 @@ const server = http.createServer((req, res) => {
   const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const host = req.headers.host || '';
 
-  // 1. Dashboard Homepage
+  // 1. API Endpoint: Terminate / Delete an Instance
+  if (parsedUrl.pathname.startsWith('/api/terminate/')) {
+    const toDeleteId = parsedUrl.pathname.replace('/api/terminate/', '').trim();
+    if (tunnels.has(toDeleteId)) {
+      const t = tunnels.get(toDeleteId);
+      try { t.ws.close(); } catch (e) {}
+      tunnels.delete(toDeleteId);
+      console.log(`[!] Instance forcefully terminated: ${toDeleteId}`);
+    }
+    // Redirect back to dashboard
+    res.writeHead(302, { Location: '/' });
+    return res.end();
+  }
+
+  // 2. Dashboard Homepage
   if (parsedUrl.pathname === '/' || parsedUrl.pathname === '/index.html') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     const activeList = Array.from(tunnels.entries()).map(([id, t]) => {
       const liveUrl = `/t/${id}/`;
       return `
-        <li style="margin: 12px 0; padding: 14px; background: #18181b; border: 1px solid #27272a; border-radius: 8px; display: flex; justify-content: space-between; align-items: center;">
+        <li style="margin: 12px 0; padding: 16px; background: #18181b; border: 1px solid #27272a; border-radius: 10px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
           <div>
             <strong style="color: #22c55e; font-size: 16px;">${id}</strong>
             <span style="color: #71717a; margin-left: 10px; font-size: 12px;">Active since ${new Date(t.createdAt).toLocaleTimeString()}</span>
             <div style="color: #a1a1aa; font-size: 13px; margin-top: 4px;">Served ${t.stats.requests} requests</div>
           </div>
-          <a href="${liveUrl}" target="_blank" style="background: #3b82f6; color: white; text-decoration: none; padding: 8px 16px; border-radius: 6px; font-weight: bold; font-size: 13px;">Open Tunnel &rarr;</a>
+          <div style="display: flex; gap: 8px;">
+            <a href="${liveUrl}" target="_blank" style="background: #3b82f6; color: white; text-decoration: none; padding: 8px 16px; border-radius: 6px; font-weight: bold; font-size: 13px;">Open Tunnel &rarr;</a>
+            <a href="/api/terminate/${id}" style="background: #ef444420; color: #ef4444; border: 1px solid #ef444450; text-decoration: none; padding: 8px 14px; border-radius: 6px; font-weight: bold; font-size: 13px;" onclick="return confirm('Terminate this tunnel instance?')">✕ Delete</a>
+          </div>
         </li>
       `;
     }).join('') || '<p style="color: #71717a; font-style: italic;">No active tunnels yet. Connect a client using: <code style="color: #38bdf8;">node client.js --port 3000</code></p>';
@@ -40,7 +57,7 @@ const server = http.createServer((req, res) => {
       <!DOCTYPE html>
       <html>
       <head>
-        <title>PortGhost | Public Relay Hub</title>
+        <title>WormHole | Public Relay Hub</title>
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
           body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #09090b; color: #f4f4f5; margin: 0; padding: 40px 20px; }
@@ -55,7 +72,7 @@ const server = http.createServer((req, res) => {
       </head>
       <body>
         <div class="container">
-          <h1>👻 PortGhost <span class="badge">Relay Online</span></h1>
+          <h1>🌀 WormHole <span class="badge">Relay Online</span></h1>
           <div class="subtitle">Next-Gen Localhost Tunneling & Remote Preview Engine</div>
           
           <div class="card">
@@ -64,12 +81,15 @@ const server = http.createServer((req, res) => {
               Start any local project on your laptop (e.g. port 3000, 5173), then run:
             </p>
             <div style="background: #000; padding: 12px 16px; border-radius: 6px; border: 1px solid #27272a; font-family: monospace; color: #38bdf8; font-size: 14px;">
-              node client.js --port 3000
+              node client.js --port 5173
             </div>
           </div>
 
           <div class="card">
-            <h3 style="margin-top:0;">📡 Active Tunnels (${tunnels.size})</h3>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+              <h3 style="margin:0;">📡 Active Tunnels (${tunnels.size})</h3>
+              <span style="font-size: 12px; color: #71717a;">Auto-cleans on disconnect</span>
+            </div>
             <ul>${activeList}</ul>
           </div>
         </div>
@@ -78,7 +98,7 @@ const server = http.createServer((req, res) => {
     `);
   }
 
-  // 2. Identify Tunnel from Request (Subdomain or Path-based /t/:id/...)
+  // 3. Identify Tunnel from Request
   let tunnelId = null;
   let targetPath = parsedUrl.pathname + parsedUrl.search;
 
@@ -87,14 +107,15 @@ const server = http.createServer((req, res) => {
     tunnelId = pathMatch[1];
     targetPath = (pathMatch[2] || '/') + parsedUrl.search;
   } else {
+    // Subdomain format
     const parts = host.split('.');
     if (parts.length > 2 && tunnels.has(parts[0])) {
       tunnelId = parts[0];
     }
   }
 
-  // Smart Referer Fallback: When SPAs (React, Vite) request root assets like "/assets/app.js",
-  // browsers send "Referer: .../t/tunnelId/". We detect and route it automatically!
+  // Smart Referer Fallback: When Vite or React requests root scripts like "/src/main.jsx",
+  // the browser sends "Referer: .../t/tunnelId/". We catch it and route it to the right tunnel!
   if (!tunnelId && req.headers.referer) {
     try {
       const refUrl = new URL(req.headers.referer);
@@ -103,29 +124,29 @@ const server = http.createServer((req, res) => {
         tunnelId = refMatch[1];
         targetPath = parsedUrl.pathname + parsedUrl.search;
       }
-    } catch (e) {
-      // Ignore URL parse errors
-    }
+    } catch (e) {}
   }
 
   if (!tunnelId) {
     res.writeHead(404, { 'Content-Type': 'text/plain' });
-    return res.end('PortGhost: 404 Not Found. Use /t/<tunnelId>/ to access a tunnel.');
+    return res.end('WormHole: 404 Not Found. Use /t/<tunnelId>/ to access a tunnel.');
   }
 
   const tunnel = tunnels.get(tunnelId);
   if (!tunnel || tunnel.ws.readyState !== 1 /* WebSocket.OPEN */) {
+    tunnels.delete(tunnelId); // Auto-cleanup dead instance
     res.writeHead(502, { 'Content-Type': 'text/html; charset=utf-8' });
     return res.end(`
       <div style="font-family: sans-serif; background: #09090b; color: #f4f4f5; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; margin:0;">
         <h2 style="color: #ef4444; margin-bottom: 8px;">👻 502 Bad Gateway</h2>
         <p style="color: #a1a1aa;">Tunnel <strong>${tunnelId}</strong> is offline or disconnected.</p>
-        <p style="color: #71717a; font-size: 13px;">Ensure the client is running on the host machine.</p>
+        <p style="color: #71717a; font-size: 13px;">This tunnel instance has been automatically removed.</p>
+        <a href="/" style="color: #3b82f6; margin-top: 16px;">&larr; Back to Dashboard</a>
       </div>
     `);
   }
 
-  // 3. Collect Incoming Request Body
+  // 4. Collect Incoming Request Body
   const bodyChunks = [];
   req.on('data', chunk => bodyChunks.push(chunk));
   req.on('end', () => {
@@ -148,7 +169,7 @@ const server = http.createServer((req, res) => {
         pendingRequests.delete(requestId);
         if (!res.headersSent) {
           res.writeHead(504, { 'Content-Type': 'text/plain' });
-          res.end('PortGhost: 504 Gateway Timeout (Local server took too long to reply)');
+          res.end('WormHole: 504 Gateway Timeout (Local server took too long to reply)');
         }
       }
     }, 30000);
@@ -161,7 +182,7 @@ const server = http.createServer((req, res) => {
       clearTimeout(timeout);
       pendingRequests.delete(requestId);
       res.writeHead(500, { 'Content-Type': 'text/plain' });
-      res.end('PortGhost: Error forwarding request to client');
+      res.end('WormHole: Error forwarding request to client');
     }
   });
 });
@@ -193,16 +214,21 @@ wss.on('connection', (ws, req) => {
     ws,
     stats: { requests: 0, bytes: 0 },
     createdAt: Date.now(),
+    isAlive: true,
   };
 
   tunnels.set(tunnelId, tunnelData);
-  console.log(`[+] Tunnel Established: ${tunnelId} (Total active: ${tunnels.size})`);
+  console.log(`[+] Tunnel Established: ${tunnelId} (Active: ${tunnels.size})`);
 
   ws.send(JSON.stringify({
     type: 'welcome',
     tunnelId,
     publicPath: `/t/${tunnelId}/`,
   }));
+
+  ws.on('pong', () => {
+    tunnelData.isAlive = true;
+  });
 
   ws.on('message', data => {
     try {
@@ -221,11 +247,34 @@ wss.on('connection', (ws, req) => {
         const headers = { ...msg.headers };
         delete headers['content-length'];
 
-        const bodyBuffer = msg.body ? Buffer.from(msg.body, 'base64') : Buffer.alloc(0);
+        let bodyBuffer = msg.body ? Buffer.from(msg.body, 'base64') : Buffer.alloc(0);
         tunnelData.stats.bytes += bodyBuffer.length;
+
+        // Smart HTML rewriting for Vite / React root paths:
+        const contentType = headers['content-type'] || '';
+        if (contentType.includes('text/html')) {
+          let html = bodyBuffer.toString('utf-8');
+
+          // Inject <base> tag so relative paths work automatically
+          if (html.includes('<head>')) {
+            html = html.replace('<head>', `<head><base href="/t/${tunnelId}/">`);
+          } else if (html.includes('<head ')) {
+            html = html.replace(/<head([^>]*)>/i, `<head$1><base href="/t/${tunnelId}/">`);
+          }
+
+          // Rewrite root paths in scripts, links, and Vite endpoints
+          html = html.replace(/(src|href)=["']\/(?!\/|t\/)/gi, `$1="/t/${tunnelId}/`);
+
+          bodyBuffer = Buffer.from(html, 'utf-8');
+        }
 
         res.writeHead(msg.statusCode || 200, headers);
         res.end(bodyBuffer);
+      } else if (msg.type === 'close') {
+        // Explicit client disconnect
+        console.log(`[-] Client requested disconnect: ${tunnelId}`);
+        tunnels.delete(tunnelId);
+        try { ws.close(); } catch (e) {}
       }
     } catch (err) {
       console.error('Error handling WebSocket message:', err.message);
@@ -233,7 +282,7 @@ wss.on('connection', (ws, req) => {
   });
 
   ws.on('close', () => {
-    console.log(`[-] Tunnel Closed: ${tunnelId}`);
+    console.log(`[-] Tunnel Closed & Auto-Deleted: ${tunnelId}`);
     tunnels.delete(tunnelId);
   });
 
@@ -243,9 +292,29 @@ wss.on('connection', (ws, req) => {
   });
 });
 
+// Auto-cleanup heartbeat every 15s (deletes dead instances immediately)
+const heartbeatInterval = setInterval(() => {
+  for (const [id, tunnel] of tunnels.entries()) {
+    if (tunnel.isAlive === false) {
+      console.log(`[!] Heartbeat timeout. Auto-deleting dead instance: ${id}`);
+      try { tunnel.ws.terminate(); } catch (e) {}
+      tunnels.delete(id);
+      continue;
+    }
+    tunnel.isAlive = false;
+    try {
+      tunnel.ws.ping();
+    } catch (e) {
+      tunnels.delete(id);
+    }
+  }
+}, 15000);
+
+server.on('close', () => clearInterval(heartbeatInterval));
+
 server.listen(PORT, () => {
   console.log(`====================================================`);
-  console.log(`  👻 PortGhost Relay Server running on port ${PORT}`);
+  console.log(`  🌀 WormHole Relay Server running on port ${PORT}`);
   console.log(`  Dashboard: http://localhost:${PORT}/`);
   console.log(`====================================================`);
 });

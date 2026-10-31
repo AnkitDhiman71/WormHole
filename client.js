@@ -188,5 +188,19 @@ function connect() {
   });
 }
 
+function cleanup() {
+  console.log(`\n  ${colors.yellow}Shutting down tunnel & cleaning up instance on relay...${colors.reset}`);
+  if (ws && ws.readyState === 1 /* WebSocket.OPEN */) {
+    try {
+      ws.send(JSON.stringify({ type: 'close' }));
+      ws.close();
+    } catch (e) {}
+  }
+  process.exit(0);
+}
+
+process.on('SIGINT', cleanup);
+process.on('SIGTERM', cleanup);
+
 connect();
 
