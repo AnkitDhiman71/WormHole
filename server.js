@@ -114,6 +114,16 @@ const server = http.createServer((req, res) => {
     }
   }
 
+  // Smart Cookie Fallback: When React lazy-loaded screens, dynamic imports, or fetch()
+  // request root paths (e.g. /src/screens/LoginPage.jsx), the browser sends the session cookie!
+  if (!tunnelId && req.headers.cookie) {
+    const cookieMatch = req.headers.cookie.match(/wormhole_active_tunnel=([a-zA-Z0-9_-]+)/);
+    if (cookieMatch && tunnels.has(cookieMatch[1])) {
+      tunnelId = cookieMatch[1];
+      targetPath = parsedUrl.pathname + parsedUrl.search;
+    }
+  }
+
   // Smart Referer Fallback: When Vite or React requests root scripts like "/src/main.jsx",
   // the browser sends "Referer: .../t/tunnelId/". We catch it and route it to the right tunnel!
   if (!tunnelId && req.headers.referer) {
@@ -267,6 +277,9 @@ wss.on('connection', (ws, req) => {
 
           bodyBuffer = Buffer.from(html, 'utf-8');
         }
+
+        // Set tunnel session cookie so all lazy-loaded routes and dynamic imports know their tunnel
+        headers['set-cookie'] = `wormhole_active_tunnel=${pending.tunnelId || tunnelId}; Path=/; SameSite=Lax`;
 
         res.writeHead(msg.statusCode || 200, headers);
         res.end(bodyBuffer);
