@@ -813,6 +813,12 @@ const server = http.createServer((req, res) => {
     `);
   }
 
+  // 3.9 Enforce trailing slash on root tunnel subpath (/t/:id -> /t/:id/)
+  if (parsedUrl.pathname.match(/^\/t\/[a-zA-Z0-9_-]+$/)) {
+    res.writeHead(302, { Location: parsedUrl.pathname + '/' + (parsedUrl.search || '') });
+    return res.end();
+  }
+
   // 4. Identify Tunnel from Request (Subpath /t/:id/ or Subdomain)
   let tunnelId = null;
   let targetPath = parsedUrl.pathname + parsedUrl.search;
@@ -1013,11 +1019,12 @@ wss.on('connection', (ws, req) => {
         if (contentType.includes('text/html')) {
           let html = bodyBuffer.toString('utf-8');
 
-          // Inject <base> tag so relative paths work automatically
+          // Inject <base> tag and SPA routing helper so React Router paths resolve cleanly
+          const bridgeScript = `<script>(function(){window.__WORMHOLE_TUNNEL__="${tunnelId}";var b="/t/${tunnelId}";if(window.location.pathname===b){window.location.replace(b+"/"+window.location.search+window.location.hash);}})();</script>`;
           if (html.includes('<head>')) {
-            html = html.replace('<head>', `<head><base href="/t/${tunnelId}/">`);
+            html = html.replace('<head>', `<head><base href="/t/${tunnelId}/">${bridgeScript}`);
           } else if (html.includes('<head ')) {
-            html = html.replace(/<head([^>]*)>/i, `<head$1><base href="/t/${tunnelId}/">`);
+            html = html.replace(/<head([^>]*)>/i, `<head$1><base href="/t/${tunnelId}/">${bridgeScript}`);
           }
 
           // Rewrite root paths in scripts, links, and Vite endpoints
@@ -1032,6 +1039,14 @@ wss.on('connection', (ws, req) => {
           }
 
           bodyBuffer = Buffer.from(html, 'utf-8');
+        } else if (contentType.includes('javascript') || contentType.includes('text/jsx') || (pending.path && (pending.path.endsWith('.jsx') || pending.path.endsWith('.tsx') || pending.path.endsWith('.js')))) {
+          let js = bodyBuffer.toString('utf-8');
+          // Auto-inject basename into React Router if BrowserRouter is present without basename
+          if (js.includes('BrowserRouter') || js.includes('createBrowserRouter')) {
+            js = js.replace(/<BrowserRouter(?!\s+basename)/g, `<BrowserRouter basename="/t/${tunnelId}"`);
+            js = js.replace(/createBrowserRouter\(([^,)]+)\)/g, `createBrowserRouter($1, { basename: "/t/${tunnelId}" })`);
+            bodyBuffer = Buffer.from(js, 'utf-8');
+          }
         }
 
         // Record real-time packet log for Superpower 2 (Live Traffic Matrix)
