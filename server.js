@@ -66,6 +66,35 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // 1.6 API Endpoint: Receive Visual Sticky Note Feedback
+  if (parsedUrl.pathname.startsWith('/api/feedback/')) {
+    const targetTunnelId = parsedUrl.pathname.replace('/api/feedback/', '').trim();
+    const tunnel = tunnels.get(targetTunnelId);
+
+    if (!tunnel || tunnel.ws.readyState !== 1) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ success: false, message: 'Tunnel client offline' }));
+    }
+
+    const chunks = [];
+    req.on('data', c => chunks.push(c));
+    req.on('end', () => {
+      try {
+        const payload = JSON.parse(Buffer.concat(chunks).toString() || '{}');
+        tunnel.ws.send(JSON.stringify({
+          type: 'feedback',
+          data: payload,
+        }));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: true, message: 'Feedback delivered to developer!' }));
+      } catch (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: false, message: 'Invalid payload' }));
+      }
+    });
+    return;
+  }
+
   // 2. Dashboard Homepage
   if (parsedUrl.pathname === '/' || parsedUrl.pathname === '/index.html') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -332,6 +361,14 @@ wss.on('connection', (ws, req) => {
 
           // Rewrite root paths in scripts, links, and Vite endpoints
           html = html.replace(/(src|href)=["']\/(?!\/|t\/)/gi, `$1="/t/${tunnelId}/`);
+
+          // Inject Live Visual Feedback & Sticky Notes Tool
+          const feedbackSnippet = getFeedbackOverlayScript(tunnelId);
+          if (html.includes('</body>')) {
+            html = html.replace('</body>', `${feedbackSnippet}</body>`);
+          } else {
+            html += feedbackSnippet;
+          }
 
           bodyBuffer = Buffer.from(html, 'utf-8');
         }
@@ -629,4 +666,293 @@ function renderCyberpunkKeypad(tunnelId) {
   </script>
 </body>
 </html>`;
+}
+
+
+function getFeedbackOverlayScript(tunnelId) {
+  return `
+<script>
+(function() {
+  if (window.__WORMHOLE_FEEDBACK_INSTALLED__) return;
+  window.__WORMHOLE_FEEDBACK_INSTALLED__ = true;
+
+  const tunnelId = "${tunnelId}";
+  const host = document.createElement('div');
+  host.id = "__wormhole_feedback_host__";
+  document.body.appendChild(host);
+
+  const shadow = host.attachShadow({ mode: 'open' });
+  shadow.innerHTML = \`
+    <style>
+      * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+      .pill {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        z-index: 2147483647;
+        background: #18181b;
+        color: #f4f4f5;
+        border: 1px solid #22c55e80;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.5), 0 0 15px rgba(34,197,94,0.3);
+        border-radius: 9999px;
+        padding: 10px 18px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s cubic-bezier(0.4,0,0.2,1);
+        user-select: none;
+      }
+      .pill:hover {
+        transform: translateY(-2px);
+        background: #27272a;
+        box-shadow: 0 12px 36px rgba(0,0,0,0.6), 0 0 22px rgba(34,197,94,0.5);
+      }
+      .pill.active {
+        background: #22c55e;
+        color: #09090b;
+        border-color: #22c55e;
+        box-shadow: 0 0 25px rgba(34,197,94,0.8);
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #22c55e;
+      }
+      .pill.active .dot {
+        background: #09090b;
+        animation: pulse 1s infinite;
+      }
+      @keyframes pulse {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.5; transform: scale(1.4); }
+      }
+      .modal {
+        display: none;
+        position: fixed;
+        bottom: 80px;
+        right: 24px;
+        z-index: 2147483647;
+        width: 320px;
+        background: #18181b;
+        border: 1px solid #27272a;
+        border-radius: 14px;
+        padding: 18px;
+        box-shadow: 0 20px 45px rgba(0,0,0,0.7);
+        color: #f4f4f5;
+        animation: slideUp 0.2s ease-out;
+      }
+      @keyframes slideUp {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      .modal h4 {
+        margin: 0 0 4px 0;
+        font-size: 14px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .target-box {
+        background: #09090b;
+        border: 1px solid #27272a;
+        border-radius: 6px;
+        padding: 6px 10px;
+        font-family: monospace;
+        font-size: 11px;
+        color: #38bdf8;
+        margin-bottom: 12px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      textarea {
+        width: 100%;
+        height: 75px;
+        background: #09090b;
+        border: 1px solid #3f3f46;
+        border-radius: 8px;
+        color: #f4f4f5;
+        padding: 10px;
+        font-size: 13px;
+        resize: none;
+        outline: none;
+        margin-bottom: 12px;
+      }
+      textarea:focus {
+        border-color: #22c55e;
+      }
+      .btn-row {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      button {
+        border: none;
+        padding: 7px 14px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: 0.15s;
+      }
+      .btn-cancel {
+        background: #27272a;
+        color: #a1a1aa;
+      }
+      .btn-send {
+        background: #22c55e;
+        color: #09090b;
+      }
+      .btn-send:hover {
+        background: #16a34a;
+      }
+      .success-toast {
+        color: #22c55e;
+        font-size: 12px;
+        text-align: center;
+        padding: 8px 0;
+        display: none;
+        font-weight: 500;
+      }
+    </style>
+    <div class="pill" id="fbPill">
+      <div class="dot"></div>
+      <span id="pillLabel">📌 Bug Report</span>
+    </div>
+    <div class="modal" id="fbModal">
+      <h4>📌 Report Issue</h4>
+      <div class="target-box" id="targetInfo">Select any element</div>
+      <textarea id="fbText" placeholder="What looks wrong? Describe issue..."></textarea>
+      <div class="btn-row" id="btnRow">
+        <button class="btn-cancel" id="btnCancel">Cancel</button>
+        <button class="btn-send" id="btnSend">Send to Terminal ➔</button>
+      </div>
+      <div class="success-toast" id="successToast">✔ Sent to developer terminal!</div>
+    </div>
+  \`;
+
+  let isInspectMode = false;
+  let hoveredEl = null;
+  let selectedTarget = null;
+
+  const pill = shadow.getElementById('fbPill');
+  const pillLabel = shadow.getElementById('pillLabel');
+  const modal = shadow.getElementById('fbModal');
+  const targetInfo = shadow.getElementById('targetInfo');
+  const fbText = shadow.getElementById('fbText');
+  const btnCancel = shadow.getElementById('btnCancel');
+  const btnSend = shadow.getElementById('btnSend');
+  const btnRow = shadow.getElementById('btnRow');
+  const successToast = shadow.getElementById('successToast');
+
+  const highlighter = document.createElement('div');
+  highlighter.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483646;border:2px dashed #22c55e;box-shadow:0 0 12px rgba(34,197,94,0.5);border-radius:4px;display:none;transition:all 0.05s ease-out;';
+  document.body.appendChild(highlighter);
+
+  function toggleInspect() {
+    isInspectMode = !isInspectMode;
+    if (isInspectMode) {
+      pill.classList.add('active');
+      pillLabel.innerText = '🎯 Tap Any Element';
+      document.body.style.cursor = 'crosshair';
+      modal.style.display = 'none';
+    } else {
+      pill.classList.remove('active');
+      pillLabel.innerText = '📌 Bug Report';
+      document.body.style.cursor = '';
+      highlighter.style.display = 'none';
+    }
+  }
+
+  pill.addEventListener('click', toggleInspect);
+
+  document.addEventListener('mouseover', e => {
+    if (!isInspectMode) return;
+    if (e.target === host || host.contains(e.target)) return;
+
+    hoveredEl = e.target;
+    const rect = hoveredEl.getBoundingClientRect();
+    highlighter.style.display = 'block';
+    highlighter.style.top = rect.top + 'px';
+    highlighter.style.left = rect.left + 'px';
+    highlighter.style.width = rect.width + 'px';
+    highlighter.style.height = rect.height + 'px';
+  }, true);
+
+  document.addEventListener('click', e => {
+    if (!isInspectMode) return;
+    if (e.target === host || host.contains(e.target)) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const target = e.target;
+    const tag = target.tagName.toLowerCase();
+    const id = target.id ? '#' + target.id : '';
+    const cls = target.className && typeof target.className === 'string' ? '.' + target.className.trim().split(/\\s+/).slice(0, 2).join('.') : '';
+    const selector = tag + id + cls;
+    const textSnippet = (target.innerText || target.value || target.alt || '').trim().slice(0, 30);
+
+    selectedTarget = {
+      selector: selector,
+      tag: tag,
+      text: textSnippet,
+      screen: window.innerWidth + 'x' + window.innerHeight + (window.innerWidth < 768 ? ' (Mobile)' : ' (Desktop)'),
+      userAgent: navigator.userAgent
+    };
+
+    targetInfo.innerText = selector + (textSnippet ? ' ("' + textSnippet + '")' : '');
+    modal.style.display = 'block';
+    btnRow.style.display = 'flex';
+    successToast.style.display = 'none';
+    fbText.value = '';
+    fbText.focus();
+
+    toggleInspect();
+  }, true);
+
+  btnCancel.addEventListener('click', () => {
+    modal.style.display = 'none';
+    highlighter.style.display = 'none';
+  });
+
+  btnSend.addEventListener('click', async () => {
+    const comment = fbText.value.trim();
+    if (!comment) return;
+
+    btnSend.disabled = true;
+    btnSend.innerText = 'Sending...';
+
+    try {
+      await fetch('/api/feedback/' + tunnelId, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...selectedTarget,
+          comment: comment,
+          timestamp: new Date().toLocaleTimeString()
+        })
+      });
+
+      btnRow.style.display = 'none';
+      successToast.style.display = 'block';
+      setTimeout(() => {
+        modal.style.display = 'none';
+        highlighter.style.display = 'none';
+        btnSend.disabled = false;
+        btnSend.innerText = 'Send to Terminal ➔';
+      }, 1400);
+    } catch (err) {
+      alert('Failed to send feedback: ' + err.message);
+      btnSend.disabled = false;
+      btnSend.innerText = 'Send to Terminal ➔';
+    }
+  });
+})();
+</script>
+  `;
 }

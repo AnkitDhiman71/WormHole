@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const WebSocket = require('ws');
 const http = require('http');
+const fs = require('fs');
 
 // Parse CLI flags
 const args = process.argv.slice(2);
@@ -97,6 +98,31 @@ function connect() {
         console.log(`  ${colors.bright}Relay Server:${colors.reset}  ${serverUrl}`);
         console.log(`  -------------------------------------------------------------`);
         console.log(`  ${colors.dim}Forwarding live requests to localhost:${targetPort}...${colors.reset}\n`);
+        return;
+      }
+
+      // 1.5 Real-Time Visual Bug / Sticky Note Feedback
+      if (msg.type === 'feedback') {
+        const { selector, text, comment, screen, timestamp } = msg.data || {};
+        
+        try { process.stdout.write('\x07'); } catch (e) {}
+
+        const line = '─'.repeat(60);
+        console.log(`\n  ${colors.bright}${colors.yellow}┌${line}┐${colors.reset}`);
+        console.log(`  ${colors.bright}${colors.yellow}│ 📌 VISUAL BUG / FEEDBACK REPORT${' '.repeat(Math.max(0, line.length - 31))}│${colors.reset}`);
+        console.log(`  ${colors.dim}├${line}┤${colors.reset}`);
+        console.log(`  │ ${colors.bright}Target Element:${colors.reset}   ${colors.cyan}${selector || 'element'}${text ? ` ("${text}")` : ''}`);
+        console.log(`  │ ${colors.bright}Device Screen:${colors.reset}    ${colors.magenta}${screen || 'Unknown'}${colors.reset}`);
+        console.log(`  │ ${colors.bright}Time Received:${colors.reset}    ${colors.dim}${timestamp || new Date().toLocaleTimeString()}${colors.reset}`);
+        console.log(`  ${colors.dim}├${line}┤${colors.reset}`);
+        console.log(`  │ ${colors.bright}Comment:${colors.reset}`);
+        console.log(`  │   ${colors.bright}${colors.green}"${comment || ''}"${colors.reset}`);
+        console.log(`  ${colors.bright}${colors.yellow}└${line}┘${colors.reset}\n`);
+
+        const logEntry = `[${timestamp || new Date().toISOString()}] Target: ${selector || 'element'} | Screen: ${screen || ''} | Comment: "${comment || ''}"\n`;
+        try {
+          fs.appendFileSync('feedback.log', logEntry);
+        } catch (e) {}
         return;
       }
 
