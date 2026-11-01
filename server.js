@@ -66,7 +66,16 @@ const server = http.createServer((req, res) => {
     const toDeleteId = parsedUrl.pathname.replace('/api/terminate/', '').trim();
     if (tunnels.has(toDeleteId)) {
       const t = tunnels.get(toDeleteId);
-      try { t.ws.close(); } catch (e) {}
+      try {
+        if (t.ws && t.ws.readyState === 1) {
+          t.ws.send(JSON.stringify({
+            type: 'nuke',
+            message: `Instance '${toDeleteId}' forcefully terminated by Master Admin. Process stopped.`,
+            timestamp: new Date().toLocaleTimeString(),
+          }));
+        }
+      } catch (e) {}
+      try { t.ws.terminate(); } catch (e) {}
       tunnels.delete(toDeleteId);
       console.log(`[!] Instance forcefully terminated by Admin: ${toDeleteId}`);
     }
