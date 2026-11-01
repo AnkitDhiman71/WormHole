@@ -115,6 +115,7 @@ ${colors.reset}
 `);
 
 let ws;
+let isNuked = false;
 function connect() {
   ws = new WebSocket(wsServerUrl);
 
@@ -175,6 +176,37 @@ function connect() {
           console.log(`  ${colors.dim}📁 Saved to feedback.log and wormhole-reports.json${colors.reset}\n`);
         } catch (e) {}
         return;
+      }
+
+      // 1.6 Superpower 1: Swarm Broadcaster Announcement
+      if (msg.type === 'broadcast') {
+        try { process.stdout.write('\x07'); } catch (e) {}
+
+        const line = '─'.repeat(60);
+        console.log(`\n  ${colors.bright}${colors.cyan}┌${line}┐${colors.reset}`);
+        console.log(`  ${colors.bright}${colors.cyan}│ 📢 MASTER ADMIN BROADCAST (${msg.sender || 'Ankit'})${' '.repeat(Math.max(0, line.length - 29 - (msg.sender || 'Ankit').length))}│${colors.reset}`);
+        console.log(`  ${colors.dim}├${line}┤${colors.reset}`);
+        console.log(`  │ ${colors.bright}${colors.yellow}${msg.message}${colors.reset}`);
+        console.log(`  ${colors.dim}├${line}┤${colors.reset}`);
+        console.log(`  │ ${colors.dim}Dispatched at: ${msg.timestamp || new Date().toLocaleTimeString()}${colors.reset}`);
+        console.log(`  ${colors.bright}${colors.cyan}└${line}┘${colors.reset}\n`);
+        return;
+      }
+
+      // 1.7 Superpower 4: DEFCON 1 Nuclear Kill Switch
+      if (msg.type === 'nuke') {
+        isNuked = true;
+        try { process.stdout.write('\x07\x07'); } catch (e) {}
+
+        const line = '═'.repeat(60);
+        console.log(`\n  ${colors.bright}${colors.red}╔${line}╗${colors.reset}`);
+        console.log(`  ${colors.bright}${colors.red}║ ☢️  DEFCON 1 NUCLEAR RESET: MASTER ADMIN TERMINATION${' '.repeat(Math.max(0, line.length - 49))}║${colors.reset}`);
+        console.log(`  ${colors.dim}╠${line}╣${colors.reset}`);
+        console.log(`  ║ ${colors.bright}${colors.yellow}${msg.message || 'All tunnels terminated worldwide by Master Admin.'}${colors.reset}`);
+        console.log(`  ║ ${colors.dim}Session closed permanently. Process exiting...${' '.repeat(Math.max(0, line.length - 46))}║${colors.reset}`);
+        console.log(`  ${colors.bright}${colors.red}╚${line}╝${colors.reset}\n`);
+        try { ws.close(); } catch (e) {}
+        process.exit(0);
       }
 
       // 2. Incoming HTTP Request to forward
@@ -275,6 +307,7 @@ function connect() {
   });
 
   ws.on('close', () => {
+    if (isNuked) return;
     console.log(`\n  ${colors.red}[!] Disconnected from relay server. Reconnecting in 3s...${colors.reset}`);
     setTimeout(connect, 3000);
   });

@@ -75,6 +75,112 @@ const server = http.createServer((req, res) => {
     return res.end();
   }
 
+  // 1.3 API Endpoint: Swarm Broadcaster (Superpower 1)
+  if (parsedUrl.pathname === '/api/admin/broadcast' && req.method === 'POST') {
+    if (!isAdmin) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ success: false, message: '403 Forbidden: Only Master Admin can broadcast.' }));
+    }
+
+    const chunks = [];
+    req.on('data', c => chunks.push(c));
+    req.on('end', () => {
+      try {
+        const { message, target } = JSON.parse(Buffer.concat(chunks).toString() || '{}');
+        if (!message || !message.trim()) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ success: false, message: 'Broadcast message cannot be empty' }));
+        }
+
+        const alertPacket = {
+          type: 'broadcast',
+          message: message.trim(),
+          sender: 'Master Admin (Ankit)',
+          timestamp: new Date().toLocaleTimeString(),
+        };
+
+        let dispatched = 0;
+        if (!target || target === 'all') {
+          for (const [id, t] of tunnels.entries()) {
+            if (t.ws && t.ws.readyState === 1) {
+              try {
+                t.ws.send(JSON.stringify(alertPacket));
+                dispatched++;
+              } catch (e) {}
+            }
+          }
+        } else if (tunnels.has(target)) {
+          const t = tunnels.get(target);
+          if (t.ws && t.ws.readyState === 1) {
+            try {
+              t.ws.send(JSON.stringify(alertPacket));
+              dispatched++;
+            } catch (e) {}
+          }
+        }
+
+        console.log(`[📢] Broadcast dispatched by Master Admin to ${dispatched} tunnel(s): "${message.trim()}"`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: true, count: dispatched, timestamp: alertPacket.timestamp }));
+      } catch (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: false, message: 'Invalid payload' }));
+      }
+    });
+    return;
+  }
+
+  // 1.4 API Endpoint: DEFCON 1 Nuclear Kill Switch (Superpower 4)
+  if (parsedUrl.pathname === '/api/admin/nuke') {
+    if (!isAdmin) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ success: false, message: '403 Forbidden: Only Master Admin can trigger DEFCON 1.' }));
+    }
+
+    let nukedCount = 0;
+    const nukePacket = {
+      type: 'nuke',
+      message: 'DEFCON 1 NUCLEAR RESET: All tunnels terminated worldwide by Master Admin (Ankit).',
+      timestamp: new Date().toLocaleTimeString(),
+    };
+
+    for (const [id, t] of tunnels.entries()) {
+      nukedCount++;
+      try {
+        if (t.ws && t.ws.readyState === 1) {
+          t.ws.send(JSON.stringify(nukePacket));
+        }
+      } catch (e) {}
+      try {
+        t.ws.terminate();
+      } catch (e) {}
+    }
+
+    tunnels.clear();
+
+    // Cancel all pending requests
+    for (const [reqId, pending] of pendingRequests.entries()) {
+      clearTimeout(pending.timeout);
+      if (pending.res && !pending.res.headersSent) {
+        try {
+          pending.res.writeHead(503, { 'Content-Type': 'text/plain' });
+          pending.res.end('WormHole: 503 Service Unavailable (DEFCON 1 Nuclear Reset by Admin)');
+        } catch (e) {}
+      }
+    }
+    pendingRequests.clear();
+
+    console.log(`[☢️] DEFCON 1 TRIGGERED: All ${nukedCount} tunnels wiped clean by Master Admin!`);
+
+    if (req.method === 'POST') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ success: true, count: nukedCount }));
+    } else {
+      res.writeHead(302, { Location: '/admin' });
+      return res.end();
+    }
+  }
+
   // 1.5 API Endpoint: Verify PIN Passcode
   if (parsedUrl.pathname.startsWith('/api/verify-pin/')) {
     const targetTunnelId = parsedUrl.pathname.replace('/api/verify-pin/', '').trim();
@@ -170,15 +276,20 @@ const server = http.createServer((req, res) => {
               ${(t.stats.bytes / 1024).toFixed(1)} KB transferred
             </div>
           </div>
-          <div style="display: flex; gap: 8px;">
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <button onclick="targetBroadcast('${id}')" style="background: #0284c720; color: #38bdf8; border: 1px solid #0284c750; padding: 8px 12px; border-radius: 6px; font-weight: 600; font-size: 13px; cursor: pointer;">📢 Alert</button>
             <a href="${liveUrl}" target="_blank" style="background: #3b82f6; color: white; text-decoration: none; padding: 8px 16px; border-radius: 6px; font-weight: 600; font-size: 13px;">Open Tunnel &rarr;</a>
-            <a href="/api/terminate/${id}" style="background: #ef444420; color: #ef4444; border: 1px solid #ef444450; text-decoration: none; padding: 8px 14px; border-radius: 6px; font-weight: 600; font-size: 13px;" onclick="return confirm('Force terminate this tunnel?')">✕ Kill Switch</a>
+            <a href="/api/terminate/${id}" style="background: #ef444420; color: #ef4444; border: 1px solid #ef444450; text-decoration: none; padding: 8px 14px; border-radius: 6px; font-weight: 600; font-size: 13px;" onclick="return confirm('Force terminate tunnel ${id}?')">✕ Kill Switch</a>
           </div>
         </li>
       `;
     }).join('') || '<p style="color: #71717a; font-style: italic; text-align: center; padding: 30px 0;">No active tunnel swarms running right now.</p>';
 
     const uptimeHrs = ((Date.now() - startTime) / (1000 * 60 * 60)).toFixed(1);
+
+    const tunnelOptions = Array.from(tunnels.keys())
+      .map(id => `<option value="${id}">🎯 Tunnel: ${id}</option>`)
+      .join('');
 
     return res.end(`
       <!DOCTYPE html>
@@ -188,8 +299,8 @@ const server = http.createServer((req, res) => {
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
           body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #09090b; color: #f4f4f5; margin: 0; padding: 40px 20px; }
-          .container { max-width: 820px; margin: 0 auto; }
-          .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid #27272a; }
+          .container { max-width: 860px; margin: 0 auto; }
+          .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid #27272a; flex-wrap: wrap; gap: 12px; }
           .admin-badge { background: #ef444420; color: #f87171; border: 1px solid #ef444440; padding: 3px 10px; font-size: 12px; border-radius: 999px; font-weight: bold; }
           .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 24px; }
           .metric-card { background: #121214; border: 1px solid #27272a; border-radius: 12px; padding: 18px; }
@@ -197,8 +308,13 @@ const server = http.createServer((req, res) => {
           .metric-lbl { font-size: 12px; color: #71717a; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; }
           .card { background: #121214; border: 1px solid #27272a; border-radius: 12px; padding: 24px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
           ul { list-style: none; padding: 0; margin: 0; }
-          .btn-logout { background: #27272a; color: #f4f4f5; text-decoration: none; padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 500; }
+          .btn-logout { background: #27272a; color: #f4f4f5; text-decoration: none; padding: 7px 14px; border-radius: 6px; font-size: 13px; font-weight: 500; }
           .btn-logout:hover { background: #3f3f46; }
+          .btn-nuke { background: #dc2626; color: white; border: 1px solid #ef4444; padding: 7px 16px; border-radius: 6px; font-size: 13px; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 6px; box-shadow: 0 0 14px rgba(220, 38, 38, 0.45); transition: all 0.2s; }
+          .btn-nuke:hover { background: #b91c1c; box-shadow: 0 0 20px rgba(220, 38, 38, 0.7); }
+          .preset-pill { background: #18181b; border: 1px solid #27272a; color: #a1a1aa; padding: 5px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; transition: all 0.2s; }
+          .preset-pill:hover { background: #27272a; color: #f4f4f5; border-color: #3f3f46; }
+          .toast { position: fixed; bottom: 24px; right: 24px; padding: 14px 20px; border-radius: 8px; font-size: 14px; font-weight: 500; z-index: 1000; box-shadow: 0 10px 30px rgba(0,0,0,0.8); display: none; }
         </style>
       </head>
       <body>
@@ -208,7 +324,8 @@ const server = http.createServer((req, res) => {
               <h2 style="margin: 0; font-size: 22px;">🌀 WormHole Command Deck</h2>
               <span class="admin-badge">Admin: Ankit</span>
             </div>
-            <div style="display: flex; gap: 10px;">
+            <div style="display: flex; gap: 10px; align-items: center;">
+              <button onclick="triggerNuclearNuke()" class="btn-nuke">☢️ DEFCON 1: Kill All</button>
               <a href="/" class="btn-logout">&larr; Public Home</a>
               <a href="/api/admin-logout" class="btn-logout" style="color: #ef4444;">Logout</a>
             </div>
@@ -233,14 +350,144 @@ const server = http.createServer((req, res) => {
             </div>
           </div>
 
+          <!-- Superpower 1: Swarm Broadcaster Card -->
+          <div class="card" id="broadcasterCard" style="margin-bottom: 24px; border: 1px solid #0284c740; background: linear-gradient(180deg, #0c1929 0%, #121214 100%);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 8px;">
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <h3 style="margin: 0; font-size: 18px; color: #38bdf8;">📢 Swarm Broadcaster</h3>
+                <span style="background: #38bdf820; color: #38bdf8; border: 1px solid #38bdf840; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700;">Superpower 1</span>
+              </div>
+              <span style="font-size: 12px; color: #71717a;">Pushes instant audio alert to developer terminals</span>
+            </div>
+
+            <div style="display: flex; flex-direction: column; gap: 12px;">
+              <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                <select id="broadcastTarget" style="background: #18181b; border: 1px solid #27272a; color: #f4f4f5; padding: 9px 12px; border-radius: 6px; font-size: 13px; outline: none; flex: 1; min-width: 220px;">
+                  <option value="all">🌐 Broadcast to ALL Active Tunnels (${tunnels.size})</option>
+                  ${tunnelOptions}
+                </select>
+                <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                  <button type="button" onclick="setBroadcastPreset('⚡ Relay maintenance scheduled in 5 minutes. Please save work.')" class="preset-pill">⚡ Maint 5m</button>
+                  <button type="button" onclick="setBroadcastPreset('🔥 High performance update deployed to WormHole relay!')" class="preset-pill">🔥 Relay Updated</button>
+                  <button type="button" onclick="setBroadcastPreset('⚠️ High bandwidth usage detected on this tunnel.')" class="preset-pill">⚠️ High Traffic</button>
+                  <button type="button" onclick="setBroadcastPreset('💬 Hello developer! Testing direct admin communication.')" class="preset-pill">💬 Hello Dev</button>
+                </div>
+              </div>
+
+              <div style="display: flex; gap: 10px;">
+                <input id="broadcastMsg" type="text" placeholder="Type announcement to broadcast live into client terminals..." style="flex: 1; background: #09090b; border: 1px solid #27272a; color: #f4f4f5; padding: 12px 14px; border-radius: 8px; font-size: 14px; outline: none;" onkeydown="if(event.key==='Enter') dispatchBroadcast()" />
+                <button id="btnDispatch" onclick="dispatchBroadcast()" style="background: #0284c7; color: white; border: none; padding: 12px 22px; border-radius: 8px; font-weight: 700; font-size: 14px; cursor: pointer; white-space: nowrap; transition: background 0.2s;">
+                  🚀 Dispatch Alert
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Active Tunnel Swarm Card -->
           <div class="card">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-              <h3 style="margin: 0;">🌐 Active Tunnel Swarm</h3>
-              <span style="font-size: 12px; color: #71717a;">Protected by Master Kill Switch</span>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 8px;">
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <h3 style="margin: 0;">🌐 Active Tunnel Swarm (${tunnels.size})</h3>
+                <span style="font-size: 12px; color: #71717a;">Protected by Master Kill Switch</span>
+              </div>
+              ${tunnels.size > 0 ? `
+                <button onclick="triggerNuclearNuke()" style="background: #ef444415; color: #f87171; border: 1px solid #ef444440; padding: 5px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">
+                  ☢️ DEFCON 1 Nuclear Strike (${tunnels.size} active)
+                </button>
+              ` : ''}
             </div>
             <ul>${activeList}</ul>
           </div>
         </div>
+
+        <div id="toastBox" class="toast"></div>
+
+        <script>
+          function showToast(text, isError = false) {
+            const toast = document.getElementById('toastBox');
+            toast.textContent = text;
+            toast.style.background = isError ? '#ef4444' : '#22c55e';
+            toast.style.color = '#fff';
+            toast.style.display = 'block';
+            setTimeout(() => { toast.style.display = 'none'; }, 4000);
+          }
+
+          function setBroadcastPreset(msg) {
+            const input = document.getElementById('broadcastMsg');
+            input.value = msg;
+            input.focus();
+          }
+
+          function targetBroadcast(id) {
+            const targetSelect = document.getElementById('broadcastTarget');
+            targetSelect.value = id;
+            const card = document.getElementById('broadcasterCard');
+            card.scrollIntoView({ behavior: 'smooth' });
+            document.getElementById('broadcastMsg').focus();
+          }
+
+          async function dispatchBroadcast() {
+            const msgInput = document.getElementById('broadcastMsg');
+            const targetSelect = document.getElementById('broadcastTarget');
+            const btn = document.getElementById('btnDispatch');
+
+            const message = msgInput.value.trim();
+            const target = targetSelect.value;
+
+            if (!message) {
+              showToast('Please type a broadcast message first!', true);
+              msgInput.focus();
+              return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = 'Dispatching...';
+
+            try {
+              const res = await fetch('/api/admin/broadcast', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message, target })
+              });
+              const data = await res.json();
+              if (data.success) {
+                showToast('📢 Dispatched to ' + data.count + ' active tunnel terminal(s)!');
+                msgInput.value = '';
+              } else {
+                showToast(data.message || 'Error sending broadcast', true);
+              }
+            } catch (e) {
+              showToast('Network error while dispatching broadcast', true);
+            } finally {
+              btn.disabled = false;
+              btn.textContent = '🚀 Dispatch Alert';
+            }
+          }
+
+          async function triggerNuclearNuke() {
+            const confirmed = confirm(
+              '☢️ DEFCON 1 NUCLEAR STRIKE CONFIRMATION\\n\\n' +
+              'Are you sure you want to FORCEFULLY TERMINATE and SEVER ALL active tunnels worldwide?\\n\\n' +
+              'Every connected client terminal will be permanently disconnected.\\n\\n' +
+              'Click OK to initiate full reset.'
+            );
+
+            if (!confirmed) return;
+
+            try {
+              const res = await fetch('/api/admin/nuke', { method: 'POST' });
+              const data = await res.json();
+              if (data.success) {
+                showToast('☢️ DEFCON 1 EXECUTED: Terminated ' + data.count + ' tunnel(s)!');
+                setTimeout(() => { window.location.reload(); }, 1200);
+              } else {
+                showToast(data.message || 'Error triggering DEFCON 1', true);
+              }
+            } catch (e) {
+              showToast('DEFCON 1 network error', true);
+            }
+          }
+        </script>
       </body>
       </html>
     `);
