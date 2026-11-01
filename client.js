@@ -2,6 +2,7 @@
 const WebSocket = require('ws');
 const http = require('http');
 const fs = require('fs');
+const qrcode = require('qrcode-terminal');
 
 // Parse CLI flags
 const args = process.argv.slice(2);
@@ -16,20 +17,23 @@ if (args.includes('--help') || args.includes('-h')) {
 
   EXAMPLES:
     $ wormhole 5173
+    $ wormhole 3000 --qr
     $ wormhole 3000 --name my-portfolio
-    $ wormhole 8080 --pin 1234
+    $ wormhole 8080 --pin 1234 --qr
     $ wormhole 5000 --name api-server --pin 9999
 
   OPTIONS:
     <port>            Local port to expose (e.g. 3000, 5173, 8080)
     -n, --name <slug> Custom tunnel name / subdomain
     --pin <passcode>  4-digit security PIN for passcode-protected preview
+    --qr, -q          Display scannable ASCII QR code for instant mobile testing
     -s, --server <url> Custom relay server URL (default: official cloud relay)
     -v, --version     Show WormHole CLI version
     -h, --help        Show this help guide
 
   FEATURES:
     ✔ Zero configuration & no accounts required
+    ✔ Mobile Camera ASCII QR Code generator (--qr)
     ✔ Real-time HTTP method, status & latency telemetry
     ✔ Injected Visual Bug Reporter & Sticky Notes tool
     ✔ Exportable Teacher / Project Evaluation Report (with PDF print)
@@ -39,7 +43,7 @@ if (args.includes('--help') || args.includes('-h')) {
 }
 
 if (args.includes('--version') || args.includes('-v')) {
-  console.log('v1.0.0');
+  console.log('v1.1.0');
   process.exit(0);
 }
 
@@ -48,6 +52,7 @@ let userProvidedPort = false;
 let serverUrl = process.env.WORMHOLE_SERVER || 'https://wormhole-c66l.onrender.com';
 let requestedName = '';
 let pin = '';
+let showQr = args.includes('--qr') || args.includes('-q');
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--port' || args[i] === '-p') {
@@ -59,6 +64,8 @@ for (let i = 0; i < args.length; i++) {
     requestedName = args[++i];
   } else if (args[i] === '--pin') {
     pin = args[++i];
+  } else if (args[i] === '--qr' || args[i] === '-q') {
+    showQr = true;
   } else if (!isNaN(parseInt(args[i], 10))) {
     targetPort = parseInt(args[i], 10);
     userProvidedPort = true;
@@ -116,6 +123,7 @@ ${colors.reset}
 
 let ws;
 let isNuked = false;
+let activePublicUrl = '';
 function connect() {
   ws = new WebSocket(wsServerUrl);
 
@@ -130,6 +138,7 @@ function connect() {
       // 1. Welcome handshake
       if (msg.type === 'welcome') {
         const publicUrl = `${serverUrl}${msg.publicPath}`;
+        activePublicUrl = publicUrl;
         console.log(`  ${colors.green}${colors.bright}✔ TUNNEL ONLINE!${colors.reset}`);
         console.log(`  -------------------------------------------------------------`);
         console.log(`  ${colors.bright}Local Target:${colors.reset}  ${colors.yellow}http://localhost:${targetPort}${colors.reset}`);
@@ -139,6 +148,17 @@ function connect() {
         }
         console.log(`  ${colors.bright}Relay Server:${colors.reset}  ${serverUrl}`);
         console.log(`  -------------------------------------------------------------`);
+
+        if (showQr) {
+          console.log(`\n  ${colors.magenta}${colors.bright}📱 Scan QR Code with Mobile Camera:${colors.reset}`);
+          qrcode.generate(publicUrl, { small: true }, q => {
+            console.log(q.split('\n').map(l => '  ' + l).join('\n'));
+          });
+          console.log(`  -------------------------------------------------------------`);
+        } else {
+          console.log(`  ${colors.dim}💡 Tip: Type 'q' + Enter (or pass --qr) to show Mobile QR Code${colors.reset}`);
+        }
+
         console.log(`  ${colors.dim}Forwarding live requests to localhost:${targetPort}...${colors.reset}\n`);
         return;
       }
@@ -330,6 +350,21 @@ function cleanup() {
 
 process.on('SIGINT', cleanup);
 process.on('SIGTERM', cleanup);
+
+// Interactive terminal shortcut: press 'q' + Enter to print QR code
+if (process.stdin.isTTY) {
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', chunk => {
+    const input = (chunk || '').toString().trim().toLowerCase();
+    if (input === 'q' && activePublicUrl) {
+      console.log(`\n  ${colors.magenta}${colors.bright}📱 Scan QR Code with Mobile Camera:${colors.reset}`);
+      qrcode.generate(activePublicUrl, { small: true }, q => {
+        console.log(q.split('\n').map(l => '  ' + l).join('\n'));
+      });
+      console.log(`  -------------------------------------------------------------\n`);
+    }
+  });
+}
 
 connect();
 

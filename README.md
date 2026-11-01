@@ -62,6 +62,28 @@ Your tunnel is instantly live at:
 
 ---
 
+## 📦 Instant npm Usage (Zero Installation)
+
+Expose any local development server to the world with 1 command:
+```bash
+npx wormhole-tunnel 5173
+```
+
+### 📱 Instant Mobile Camera Preview (--qr)
+Generate a camera-scannable ASCII QR code in your terminal:
+```bash
+npx wormhole-tunnel 5173 --qr
+```
+*(Or press `q` + Enter anytime while the tunnel is running to view the QR code!)*
+
+### 🔒 Cyberpunk 4-Digit PIN Protection
+Lock your preview behind a security keypad:
+```bash
+npx wormhole-tunnel 3000 --pin 1234
+```
+
+---
+
 ## 🌐 Deploying Relay to the Internet (For Worldwide Access)
 
 To let friends on external Wi-Fi networks access your links:
