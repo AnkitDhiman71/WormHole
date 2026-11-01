@@ -181,6 +181,40 @@ const server = http.createServer((req, res) => {
     }
   }
 
+  // 1.45 API Endpoint: Live Traffic Stream Inspector (Superpower 2)
+  if (parsedUrl.pathname === '/api/admin/traffic') {
+    if (!isAdmin) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ success: false, message: '403 Forbidden: Admin Only' }));
+    }
+
+    const targetId = parsedUrl.searchParams.get('tunnelId');
+    if (targetId && tunnels.has(targetId)) {
+      const t = tunnels.get(targetId);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({
+        success: true,
+        tunnelId: targetId,
+        stats: t.stats,
+        targetPort: t.targetPort,
+        pin: t.pin,
+        logs: t.logs || []
+      }));
+    }
+
+    // Return list of all active tunnels with their latest 5 logs
+    const allLogs = [];
+    for (const [id, t] of tunnels.entries()) {
+      if (t.logs) {
+        allLogs.push(...t.logs.map(l => ({ ...l, tunnelId: id })));
+      }
+    }
+    allLogs.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ success: true, logs: allLogs.slice(0, 50) }));
+  }
+
   // 1.5 API Endpoint: Verify PIN Passcode
   if (parsedUrl.pathname.startsWith('/api/verify-pin/')) {
     const targetTunnelId = parsedUrl.pathname.replace('/api/verify-pin/', '').trim();
@@ -276,10 +310,12 @@ const server = http.createServer((req, res) => {
               ${(t.stats.bytes / 1024).toFixed(1)} KB transferred
             </div>
           </div>
-          <div style="display: flex; gap: 8px; align-items: center;">
-            <button onclick="targetBroadcast('${id}')" style="background: #0284c720; color: #38bdf8; border: 1px solid #0284c750; padding: 8px 12px; border-radius: 6px; font-weight: 600; font-size: 13px; cursor: pointer;">📢 Alert</button>
-            <a href="${liveUrl}" target="_blank" style="background: #3b82f6; color: white; text-decoration: none; padding: 8px 16px; border-radius: 6px; font-weight: 600; font-size: 13px;">Open Tunnel &rarr;</a>
-            <a href="/api/terminate/${id}" style="background: #ef444420; color: #ef4444; border: 1px solid #ef444450; text-decoration: none; padding: 8px 14px; border-radius: 6px; font-weight: 600; font-size: 13px;" onclick="return confirm('Force terminate tunnel ${id}?')">✕ Kill Switch</a>
+          <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+            <button onclick="openMirrorModal('${id}')" style="background: #8b5cf620; color: #a78bfa; border: 1px solid #8b5cf650; padding: 7px 11px; border-radius: 6px; font-weight: 600; font-size: 12px; cursor: pointer;">🪞 Mirror (SP7)</button>
+            <button onclick="openTrafficModal('${id}')" style="background: #10b98120; color: #34d399; border: 1px solid #10b98150; padding: 7px 11px; border-radius: 6px; font-weight: 600; font-size: 12px; cursor: pointer;">📊 Inspect (SP2)</button>
+            <button onclick="targetBroadcast('${id}')" style="background: #0284c720; color: #38bdf8; border: 1px solid #0284c750; padding: 7px 11px; border-radius: 6px; font-weight: 600; font-size: 12px; cursor: pointer;">📢 Alert (SP1)</button>
+            <a href="${liveUrl}" target="_blank" style="background: #3b82f6; color: white; text-decoration: none; padding: 7px 13px; border-radius: 6px; font-weight: 600; font-size: 12px;">Open &rarr;</a>
+            <a href="/api/terminate/${id}" style="background: #ef444420; color: #ef4444; border: 1px solid #ef444450; text-decoration: none; padding: 7px 11px; border-radius: 6px; font-weight: 600; font-size: 12px;" onclick="return confirm('Force terminate tunnel ${id}?')">✕ Kill</a>
           </div>
         </li>
       `;
@@ -314,7 +350,29 @@ const server = http.createServer((req, res) => {
           .btn-nuke:hover { background: #b91c1c; box-shadow: 0 0 20px rgba(220, 38, 38, 0.7); }
           .preset-pill { background: #18181b; border: 1px solid #27272a; color: #a1a1aa; padding: 5px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; transition: all 0.2s; }
           .preset-pill:hover { background: #27272a; color: #f4f4f5; border-color: #3f3f46; }
-          .toast { position: fixed; bottom: 24px; right: 24px; padding: 14px 20px; border-radius: 8px; font-size: 14px; font-weight: 500; z-index: 1000; box-shadow: 0 10px 30px rgba(0,0,0,0.8); display: none; }
+          .toast { position: fixed; bottom: 24px; right: 24px; padding: 14px 20px; border-radius: 8px; font-size: 14px; font-weight: 500; z-index: 3000; box-shadow: 0 10px 30px rgba(0,0,0,0.8); display: none; }
+          .modal-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); backdrop-filter: blur(8px); z-index: 2000; display: none; align-items: center; justify-content: center; padding: 20px; }
+          .modal-content { background: #121214; border: 1px solid #27272a; border-radius: 16px; width: 100%; max-width: 1050px; max-height: 92vh; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 25px 60px rgba(0,0,0,0.9); }
+          .modal-header { padding: 14px 20px; border-bottom: 1px solid #27272a; display: flex; justify-content: space-between; align-items: center; background: #18181b; flex-wrap: wrap; gap: 10px; }
+          .modal-body { padding: 20px; overflow-y: auto; flex: 1; background: #0c0c0e; }
+          .device-btn { background: #27272a; color: #a1a1aa; border: 1px solid #3f3f46; padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+          .device-btn.active { background: #8b5cf6; color: white; border-color: #8b5cf6; }
+          .phone-frame { width: 390px; height: 680px; margin: 0 auto; border: 10px solid #27272a; border-radius: 40px; overflow: hidden; position: relative; box-shadow: 0 10px 40px rgba(0,0,0,0.7); background: #000; transition: all 0.3s; }
+          .desktop-frame { width: 100%; height: 680px; border: 1px solid #27272a; border-radius: 10px; overflow: hidden; background: #000; transition: all 0.3s; }
+          .traffic-table { width: 100%; border-collapse: collapse; font-family: monospace; font-size: 13px; }
+          .traffic-table th { text-align: left; padding: 10px 12px; background: #18181b; color: #71717a; border-bottom: 1px solid #27272a; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+          .traffic-table td { padding: 10px 12px; border-bottom: 1px solid #222225; }
+          .traffic-table tr:hover td { background: #18181b80; }
+          .badge-method { padding: 2px 7px; border-radius: 4px; font-weight: bold; font-size: 11px; }
+          .method-GET { background: #10b98120; color: #34d399; border: 1px solid #10b98140; }
+          .method-POST { background: #3b82f620; color: #60a5fa; border: 1px solid #3b82f640; }
+          .method-PUT { background: #f59e0b20; color: #fbbf24; border: 1px solid #f59e0b40; }
+          .method-DELETE { background: #ef444420; color: #f87171; border: 1px solid #ef444440; }
+          .badge-status { padding: 2px 7px; border-radius: 4px; font-weight: bold; font-size: 11px; }
+          .status-2xx { background: #10b98120; color: #34d399; }
+          .status-3xx { background: #38bdf820; color: #38bdf8; }
+          .status-4xx { background: #f59e0b20; color: #fbbf24; }
+          .status-5xx { background: #ef444420; color: #f87171; }
         </style>
       </head>
       <body>
@@ -402,6 +460,85 @@ const server = http.createServer((req, res) => {
 
         <div id="toastBox" class="toast"></div>
 
+        <!-- Superpower 7: Shadow Preview Deck Modal -->
+        <div id="mirrorModal" class="modal-overlay">
+          <div class="modal-content">
+            <div class="modal-header">
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <h3 style="margin: 0; font-size: 16px; color: #a78bfa;">🪞 Shadow Preview Deck</h3>
+                <span id="mirrorTunnelBadge" style="background: #8b5cf620; color: #a78bfa; border: 1px solid #8b5cf640; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700;"></span>
+              </div>
+              <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                <button type="button" id="btnPhone" onclick="setDeviceMode('phone')" class="device-btn active">📱 Mobile</button>
+                <button type="button" id="btnDesktop" onclick="setDeviceMode('desktop')" class="device-btn">💻 Desktop</button>
+                <button type="button" onclick="refreshMirrorFrame()" class="preset-pill" style="padding: 6px 10px;">🔄 Refresh</button>
+                <a id="mirrorExternalLink" href="#" target="_blank" class="preset-pill" style="padding: 6px 10px; text-decoration: none;">🔗 New Tab</a>
+                <button type="button" onclick="closeMirrorModal()" style="background: #ef444420; color: #f87171; border: 1px solid #ef444440; padding: 6px 10px; border-radius: 6px; cursor: pointer;">✕ Close</button>
+              </div>
+            </div>
+            <div class="modal-body" style="display: flex; justify-content: center; align-items: center; min-height: 400px;">
+              <div id="mirrorFrameContainer" class="phone-frame">
+                <iframe id="mirrorIframe" style="width: 100%; height: 100%; border: none; background: white;" src="about:blank"></iframe>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Superpower 2: Live Traffic Matrix & Stream Inspector Modal -->
+        <div id="trafficModal" class="modal-overlay">
+          <div class="modal-content">
+            <div class="modal-header">
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <h3 style="margin: 0; font-size: 16px; color: #34d399;">📊 Live Traffic Matrix & Stream Inspector</h3>
+                <span id="trafficTunnelBadge" style="background: #10b98120; color: #34d399; border: 1px solid #10b98140; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700;"></span>
+                <span style="background: #22c55e20; color: #4ade80; border: 1px solid #22c55e40; padding: 2px 8px; border-radius: 999px; font-size: 10px; font-weight: 700;">● STREAMING LIVE</span>
+              </div>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <button type="button" onclick="fetchTrafficData()" class="preset-pill" style="padding: 6px 10px;">⚡ Pull Now</button>
+                <button type="button" onclick="closeTrafficModal()" style="background: #ef444420; color: #f87171; border: 1px solid #ef444440; padding: 6px 10px; border-radius: 6px; cursor: pointer;">✕ Close</button>
+              </div>
+            </div>
+            <div class="modal-body">
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 16px;">
+                <div style="background: #18181b; border: 1px solid #27272a; padding: 12px; border-radius: 8px;">
+                  <div style="font-size: 11px; color: #71717a; text-transform: uppercase;">Requests</div>
+                  <div id="trafficTotalReq" style="font-size: 20px; font-weight: 700; color: #38bdf8;">0</div>
+                </div>
+                <div style="background: #18181b; border: 1px solid #27272a; padding: 12px; border-radius: 8px;">
+                  <div style="font-size: 11px; color: #71717a; text-transform: uppercase;">Transferred</div>
+                  <div id="trafficTotalBytes" style="font-size: 20px; font-weight: 700; color: #a855f7;">0 KB</div>
+                </div>
+                <div style="background: #18181b; border: 1px solid #27272a; padding: 12px; border-radius: 8px;">
+                  <div style="font-size: 11px; color: #71717a; text-transform: uppercase;">Avg Latency</div>
+                  <div id="trafficAvgLatency" style="font-size: 20px; font-weight: 700; color: #22c55e;">0 ms</div>
+                </div>
+              </div>
+
+              <div style="background: #18181b; border: 1px solid #27272a; border-radius: 10px; overflow: hidden;">
+                <table class="traffic-table">
+                  <thead>
+                    <tr>
+                      <th style="width: 100px;">Time</th>
+                      <th style="width: 80px;">Method</th>
+                      <th>Path</th>
+                      <th style="width: 90px;">Status</th>
+                      <th style="width: 90px;">Latency</th>
+                      <th style="width: 90px;">Size</th>
+                    </tr>
+                  </thead>
+                  <tbody id="trafficTableBody">
+                    <tr>
+                      <td colspan="6" style="text-align: center; color: #71717a; padding: 30px;">
+                        Listening for packets... Open the tunnel in your browser to see requests stream live here.
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <script>
           function showToast(text, isError = false) {
             const toast = document.getElementById('toastBox');
@@ -486,6 +623,114 @@ const server = http.createServer((req, res) => {
             } catch (e) {
               showToast('DEFCON 1 network error', true);
             }
+          }
+
+          // Superpower 7: Mirror Deck
+          let currentMirrorId = null;
+          function openMirrorModal(id) {
+            currentMirrorId = id;
+            document.getElementById('mirrorTunnelBadge').textContent = id;
+            document.getElementById('mirrorExternalLink').href = '/t/' + id + '/';
+            document.getElementById('mirrorIframe').src = '/t/' + id + '/';
+            setDeviceMode('phone');
+            document.getElementById('mirrorModal').style.display = 'flex';
+          }
+
+          function closeMirrorModal() {
+            document.getElementById('mirrorModal').style.display = 'none';
+            document.getElementById('mirrorIframe').src = 'about:blank';
+            currentMirrorId = null;
+          }
+
+          function setDeviceMode(mode) {
+            const container = document.getElementById('mirrorFrameContainer');
+            const btnPhone = document.getElementById('btnPhone');
+            const btnDesktop = document.getElementById('btnDesktop');
+
+            if (mode === 'phone') {
+              container.className = 'phone-frame';
+              btnPhone.classList.add('active');
+              btnDesktop.classList.remove('active');
+            } else {
+              container.className = 'desktop-frame';
+              btnDesktop.classList.add('active');
+              btnPhone.classList.remove('active');
+            }
+          }
+
+          function refreshMirrorFrame() {
+            if (currentMirrorId) {
+              document.getElementById('mirrorIframe').src = '/t/' + currentMirrorId + '/';
+            }
+          }
+
+          // Superpower 2: Traffic Matrix Inspector
+          let currentTrafficId = null;
+          let trafficPollTimer = null;
+
+          function openTrafficModal(id) {
+            currentTrafficId = id;
+            document.getElementById('trafficTunnelBadge').textContent = id;
+            document.getElementById('trafficModal').style.display = 'flex';
+            fetchTrafficData();
+            if (trafficPollTimer) clearInterval(trafficPollTimer);
+            trafficPollTimer = setInterval(fetchTrafficData, 1500);
+          }
+
+          function closeTrafficModal() {
+            if (trafficPollTimer) clearInterval(trafficPollTimer);
+            document.getElementById('trafficModal').style.display = 'none';
+            currentTrafficId = null;
+          }
+
+          async function fetchTrafficData() {
+            if (!currentTrafficId) return;
+            try {
+              const res = await fetch('/api/admin/traffic?tunnelId=' + encodeURIComponent(currentTrafficId));
+              const data = await res.json();
+              if (data.success) {
+                renderTrafficLogs(data.logs || [], data.stats || {});
+              }
+            } catch (e) {}
+          }
+
+          function renderTrafficLogs(logs, stats) {
+            document.getElementById('trafficTotalReq').textContent = stats.requests || 0;
+            document.getElementById('trafficTotalBytes').textContent = ((stats.bytes || 0) / 1024).toFixed(1) + ' KB';
+
+            let avgLat = 0;
+            if (logs.length > 0) {
+              const totalLat = logs.reduce((acc, l) => acc + (l.duration || 0), 0);
+              avgLat = Math.round(totalLat / logs.length);
+            }
+            document.getElementById('trafficAvgLatency').textContent = avgLat + ' ms';
+
+            const tbody = document.getElementById('trafficTableBody');
+            if (!logs || logs.length === 0) {
+              tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: #71717a; padding: 30px;">Listening for packets... Open the tunnel in your browser to see requests stream live here.</td></tr>';
+              return;
+            }
+
+            tbody.innerHTML = logs.map(l => {
+              const methodClass = 'method-' + (l.method || 'GET');
+              let statusClass = 'status-2xx';
+              if (l.status >= 500) statusClass = 'status-5xx';
+              else if (l.status >= 400) statusClass = 'status-4xx';
+              else if (l.status >= 300) statusClass = 'status-3xx';
+
+              return '<tr>' +
+                '<td style="color: #71717a;">' + (l.timestamp || '') + '</td>' +
+                '<td><span class="badge-method ' + methodClass + '">' + (l.method || 'GET') + '</span></td>' +
+                '<td style="color: #f4f4f5; font-weight: 500;">' + escapeHtml(l.path || '/') + '</td>' +
+                '<td><span class="badge-status ' + statusClass + '">' + (l.status || 200) + '</span></td>' +
+                '<td style="color: #a1a1aa;">' + (l.duration || 0) + ' ms</td>' +
+                '<td style="color: #a1a1aa;">' + ((l.bytes || 0) / 1024).toFixed(1) + ' KB</td>' +
+              '</tr>';
+            }).join('');
+          }
+
+          function escapeHtml(str) {
+            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
           }
         </script>
       </body>
@@ -631,7 +876,8 @@ const server = http.createServer((req, res) => {
     const authCookie = `wormhole_pin_${tunnelId}=authorized`;
     const hasPinAuth = req.headers.cookie && req.headers.cookie.includes(authCookie);
 
-    if (!hasPinAuth) {
+    // Master Admin bypasses PIN gate automatically (Superpower 7 God-Mode Preview)
+    if (!hasPinAuth && !isAdmin) {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       return res.end(renderCyberpunkKeypad(tunnelId));
     }
@@ -665,7 +911,14 @@ const server = http.createServer((req, res) => {
       }
     }, 30000);
 
-    pendingRequests.set(requestId, { res, timeout, tunnelId });
+    pendingRequests.set(requestId, {
+      res,
+      timeout,
+      tunnelId,
+      method: req.method,
+      path: targetPath,
+      startTime: Date.now()
+    });
 
     try {
       tunnel.ws.send(JSON.stringify(packet));
@@ -717,6 +970,7 @@ wss.on('connection', (ws, req) => {
     targetPort,
     pin,
     stats: { requests: 0, bytes: 0 },
+    logs: [],
     createdAt: Date.now(),
     isAlive: true,
   };
@@ -779,6 +1033,20 @@ wss.on('connection', (ws, req) => {
 
           bodyBuffer = Buffer.from(html, 'utf-8');
         }
+
+        // Record real-time packet log for Superpower 2 (Live Traffic Matrix)
+        const duration = Date.now() - (pending.startTime || Date.now());
+        tunnelData.logs = tunnelData.logs || [];
+        tunnelData.logs.unshift({
+          id: msg.requestId,
+          method: pending.method || 'GET',
+          path: pending.path || '/',
+          status: msg.statusCode || 200,
+          duration,
+          bytes: bodyBuffer.length,
+          timestamp: new Date().toLocaleTimeString(),
+        });
+        if (tunnelData.logs.length > 50) tunnelData.logs.pop();
 
         // Set tunnel session cookie so all lazy-loaded routes and dynamic imports know their tunnel
         headers['set-cookie'] = `wormhole_active_tunnel=${pending.tunnelId || tunnelId}; Path=/; SameSite=Lax`;
