@@ -2,7 +2,16 @@
 const WebSocket = require('ws');
 const http = require('http');
 const fs = require('fs');
+const zlib = require('zlib');
 const qrcode = require('qrcode-terminal');
+
+// Keep-alive agent for ultra-fast connection reuse on localhost
+const localAgent = new http.Agent({
+  keepAlive: true,
+  maxSockets: 100,
+  maxFreeSockets: 50,
+  timeout: 60000,
+});
 
 // Parse CLI flags
 const args = process.argv.slice(2);
@@ -43,7 +52,7 @@ if (args.includes('--help') || args.includes('-h')) {
 }
 
 if (args.includes('--version') || args.includes('-v')) {
-  console.log('v1.1.0');
+  console.log('v1.1.1');
   process.exit(0);
 }
 
@@ -246,6 +255,7 @@ function connect() {
             path: reqPath,
             method: method,
             headers: cleanHeaders,
+            agent: localAgent,
           };
 
           const localReq = http.request(localReqOptions, localRes => {
@@ -253,7 +263,22 @@ function connect() {
             localRes.on('data', chunk => resChunks.push(chunk));
             localRes.on('end', () => {
               const duration = Date.now() - startTime;
-              const resBody = Buffer.concat(resChunks);
+              let finalBody = Buffer.concat(resChunks);
+              const responseHeaders = { ...localRes.headers };
+              const contentType = (responseHeaders['content-type'] || '').toLowerCase();
+              const alreadyEncoded = responseHeaders['content-encoding'];
+              const clientAcceptsGzip = (cleanHeaders['accept-encoding'] || '').includes('gzip');
+
+              // Ultra-fast streaming compression: gzip heavy JS, CSS, and SVG dependencies
+              // (Leaves HTML uncompressed so the relay server can inject <base> & bridge scripts)
+              if (!alreadyEncoded && clientAcceptsGzip && !contentType.includes('text/html') && finalBody.length > 1024) {
+                try {
+                  const compressed = zlib.gzipSync(finalBody);
+                  responseHeaders['content-encoding'] = 'gzip';
+                  delete responseHeaders['content-length'];
+                  finalBody = compressed;
+                } catch (e) {}
+              }
 
               // Log activity to terminal
               const timestamp = new Date().toLocaleTimeString();
@@ -262,7 +287,7 @@ function connect() {
                 `${colors.bright}${method.padEnd(6)}${colors.reset} ` +
                 `${reqPath.padEnd(25)} ` +
                 `${formatStatus(localRes.statusCode)} ` +
-                `${colors.dim}(${duration}ms, ${resBody.length} bytes)${colors.reset}`
+                `${colors.dim}(${duration}ms, ${finalBody.length} bytes)${colors.reset}`
               );
 
               // Reply back to relay
@@ -270,8 +295,8 @@ function connect() {
                 type: 'response',
                 requestId,
                 statusCode: localRes.statusCode,
-                headers: localRes.headers,
-                body: resBody.toString('base64'),
+                headers: responseHeaders,
+                body: finalBody.toString('base64'),
               }));
             });
           });
