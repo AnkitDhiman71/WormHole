@@ -3,6 +3,8 @@ const { WebSocketServer } = require('ws');
 const crypto = require('crypto');
 
 const PORT = process.env.PORT || 8080;
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin_Ankit@1320';
+const startTime = Date.now();
 const tunnels = new Map(); // tunnelId -> { ws, stats: { requests: 0, bytes: 0 }, createdAt, isAlive: true }
 const pendingRequests = new Map(); // requestId -> { res, timeout }
 
@@ -18,18 +20,58 @@ function generateSlug() {
 const server = http.createServer((req, res) => {
   const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const host = req.headers.host || '';
+  const isAdmin = req.headers.cookie && req.headers.cookie.includes('wormhole_admin_session=authorized');
 
-  // 1. API Endpoint: Terminate / Delete an Instance
+  // 1. API Endpoint: Admin Login
+  if (parsedUrl.pathname === '/api/admin-login' && req.method === 'POST') {
+    const chunks = [];
+    req.on('data', c => chunks.push(c));
+    req.on('end', () => {
+      try {
+        const { password } = JSON.parse(Buffer.concat(chunks).toString() || '{}');
+        if (password === ADMIN_PASSWORD) {
+          res.writeHead(200, {
+            'Content-Type': 'application/json',
+            'Set-Cookie': `wormhole_admin_session=authorized; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`,
+          });
+          return res.end(JSON.stringify({ success: true, redirect: '/admin' }));
+        } else {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ success: false, message: 'Access Denied: Invalid Master Password' }));
+        }
+      } catch (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: false, message: 'Invalid payload' }));
+      }
+    });
+    return;
+  }
+
+  // 1.1 API Endpoint: Admin Logout
+  if (parsedUrl.pathname === '/api/admin-logout') {
+    res.writeHead(302, {
+      'Set-Cookie': 'wormhole_admin_session=; Path=/; Max-Age=0',
+      'Location': '/',
+    });
+    return res.end();
+  }
+
+  // 1.2 API Endpoint: Terminate / Delete an Instance (Admin Only!)
   if (parsedUrl.pathname.startsWith('/api/terminate/')) {
+    if (!isAdmin) {
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+      return res.end('403 Forbidden: Only Master Admin can terminate tunnel instances.');
+    }
+
     const toDeleteId = parsedUrl.pathname.replace('/api/terminate/', '').trim();
     if (tunnels.has(toDeleteId)) {
       const t = tunnels.get(toDeleteId);
       try { t.ws.close(); } catch (e) {}
       tunnels.delete(toDeleteId);
-      console.log(`[!] Instance forcefully terminated: ${toDeleteId}`);
+      console.log(`[!] Instance forcefully terminated by Admin: ${toDeleteId}`);
     }
-    // Redirect back to dashboard
-    res.writeHead(302, { Location: '/' });
+    // Redirect back to admin deck
+    res.writeHead(302, { Location: '/admin' });
     return res.end();
   }
 
@@ -95,63 +137,106 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 2. Dashboard Homepage
-  if (parsedUrl.pathname === '/' || parsedUrl.pathname === '/index.html') {
+  // 2. Private Master Admin Command Deck (/admin)
+  if (parsedUrl.pathname === '/admin' || parsedUrl.pathname === '/admin/') {
+    if (!isAdmin) {
+      // Show Cyberpunk Admin Login Page
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return res.end(renderAdminLoginPage());
+    }
+
+    // Show Master Admin Command Deck
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    let totalRequests = 0;
+    let totalBytes = 0;
+    for (const t of tunnels.values()) {
+      totalRequests += t.stats.requests;
+      totalBytes += t.stats.bytes;
+    }
+
     const activeList = Array.from(tunnels.entries()).map(([id, t]) => {
       const liveUrl = `/t/${id}/`;
       return `
-        <li style="margin: 12px 0; padding: 16px; background: #18181b; border: 1px solid #27272a; border-radius: 10px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+        <li style="margin: 12px 0; padding: 18px; background: #18181b; border: 1px solid #27272a; border-radius: 12px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
           <div>
-            <strong style="color: #22c55e; font-size: 16px;">${id}</strong>
-            ${t.targetPort ? `<span style="background: #27272a; color: #38bdf8; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin-left: 8px; font-family: monospace;">&rarr; localhost:${t.targetPort}</span>` : ''}
-            <span style="color: #71717a; margin-left: 10px; font-size: 12px;">Active since ${new Date(t.createdAt).toLocaleTimeString()}</span>
-            <div style="color: #a1a1aa; font-size: 13px; margin-top: 4px;">Served ${t.stats.requests} requests (${(t.stats.bytes / 1024).toFixed(1)} KB)</div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <strong style="color: #22c55e; font-size: 16px;">${id}</strong>
+              ${t.targetPort ? `<span style="background: #27272a; color: #38bdf8; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-family: monospace;">&rarr; localhost:${t.targetPort}</span>` : ''}
+              ${t.pin ? `<span style="background: #eab30820; color: #facc15; border: 1px solid #eab30840; padding: 2px 8px; border-radius: 4px; font-size: 11px;">🔒 PIN: ${t.pin}</span>` : `<span style="background: #27272a; color: #a1a1aa; padding: 2px 8px; border-radius: 4px; font-size: 11px;">🔓 Public</span>`}
+            </div>
+            <div style="color: #a1a1aa; font-size: 13px; margin-top: 6px;">
+              Active since ${new Date(t.createdAt).toLocaleTimeString()} &bull; 
+              <span style="color: #f4f4f5; font-weight: 500;">${t.stats.requests} requests</span> &bull; 
+              ${(t.stats.bytes / 1024).toFixed(1)} KB transferred
+            </div>
           </div>
           <div style="display: flex; gap: 8px;">
-            <a href="${liveUrl}" target="_blank" style="background: #3b82f6; color: white; text-decoration: none; padding: 8px 16px; border-radius: 6px; font-weight: bold; font-size: 13px;">Open Tunnel &rarr;</a>
-            <a href="/api/terminate/${id}" style="background: #ef444420; color: #ef4444; border: 1px solid #ef444450; text-decoration: none; padding: 8px 14px; border-radius: 6px; font-weight: bold; font-size: 13px;" onclick="return confirm('Terminate this tunnel instance?')">✕ Delete</a>
+            <a href="${liveUrl}" target="_blank" style="background: #3b82f6; color: white; text-decoration: none; padding: 8px 16px; border-radius: 6px; font-weight: 600; font-size: 13px;">Open Tunnel &rarr;</a>
+            <a href="/api/terminate/${id}" style="background: #ef444420; color: #ef4444; border: 1px solid #ef444450; text-decoration: none; padding: 8px 14px; border-radius: 6px; font-weight: 600; font-size: 13px;" onclick="return confirm('Force terminate this tunnel?')">✕ Kill Switch</a>
           </div>
         </li>
       `;
-    }).join('') || '<p style="color: #71717a; font-style: italic;">No active tunnels yet. Connect a client using: <code style="color: #38bdf8;">node client.js --port 3000</code></p>';
+    }).join('') || '<p style="color: #71717a; font-style: italic; text-align: center; padding: 30px 0;">No active tunnel swarms running right now.</p>';
+
+    const uptimeHrs = ((Date.now() - startTime) / (1000 * 60 * 60)).toFixed(1);
 
     return res.end(`
       <!DOCTYPE html>
       <html>
       <head>
-        <title>WormHole | Public Relay Hub</title>
+        <title>WormHole | Master Admin Command Deck</title>
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
           body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #09090b; color: #f4f4f5; margin: 0; padding: 40px 20px; }
-          .container { max-width: 720px; margin: 0 auto; }
-          h1 { font-size: 32px; font-weight: 800; margin-bottom: 4px; display: flex; align-items: center; gap: 10px; }
-          .badge { background: #22c55e20; color: #4ade80; border: 1px solid #22c55e40; padding: 2px 8px; font-size: 12px; border-radius: 999px; }
-          .subtitle { color: #a1a1aa; margin-bottom: 30px; font-size: 15px; }
-          .card { background: #121214; border: 1px solid #27272a; border-radius: 12px; padding: 24px; margin-bottom: 24px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
-          code { font-family: monospace; background: #27272a; padding: 2px 6px; border-radius: 4px; color: #e4e4e7; }
+          .container { max-width: 820px; margin: 0 auto; }
+          .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid #27272a; }
+          .admin-badge { background: #ef444420; color: #f87171; border: 1px solid #ef444440; padding: 3px 10px; font-size: 12px; border-radius: 999px; font-weight: bold; }
+          .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 24px; }
+          .metric-card { background: #121214; border: 1px solid #27272a; border-radius: 12px; padding: 18px; }
+          .metric-val { font-size: 26px; font-weight: 800; color: #22c55e; margin-top: 4px; }
+          .metric-lbl { font-size: 12px; color: #71717a; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; }
+          .card { background: #121214; border: 1px solid #27272a; border-radius: 12px; padding: 24px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
           ul { list-style: none; padding: 0; margin: 0; }
+          .btn-logout { background: #27272a; color: #f4f4f5; text-decoration: none; padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 500; }
+          .btn-logout:hover { background: #3f3f46; }
         </style>
       </head>
       <body>
         <div class="container">
-          <h1>🌀 WormHole <span class="badge">Relay Online</span></h1>
-          <div class="subtitle">Next-Gen Localhost Tunneling & Remote Preview Engine</div>
-          
-          <div class="card">
-            <h3 style="margin-top:0; color: #f4f4f5;">⚡ Quick Start</h3>
-            <p style="color: #a1a1aa; font-size: 14px; line-height: 1.6;">
-              Start any local project on your laptop (e.g. port 3000, 5173), then run:
-            </p>
-            <div style="background: #000; padding: 12px 16px; border-radius: 6px; border: 1px solid #27272a; font-family: monospace; color: #38bdf8; font-size: 14px;">
-              node client.js --port 5173
+          <div class="top-bar">
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <h2 style="margin: 0; font-size: 22px;">🌀 WormHole Command Deck</h2>
+              <span class="admin-badge">Admin: Ankit</span>
+            </div>
+            <div style="display: flex; gap: 10px;">
+              <a href="/" class="btn-logout">&larr; Public Home</a>
+              <a href="/api/admin-logout" class="btn-logout" style="color: #ef4444;">Logout</a>
+            </div>
+          </div>
+
+          <div class="grid">
+            <div class="metric-card">
+              <div class="metric-lbl">Active Tunnels</div>
+              <div class="metric-val">${tunnels.size}</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-lbl">Total Requests</div>
+              <div class="metric-val" style="color: #38bdf8;">${totalRequests}</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-lbl">Bandwidth Streamed</div>
+              <div class="metric-val" style="color: #a855f7;">${(totalBytes / 1024).toFixed(1)} <span style="font-size: 14px;">KB</span></div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-lbl">Relay Uptime</div>
+              <div class="metric-val" style="color: #f59e0b;">${uptimeHrs} <span style="font-size: 14px;">hrs</span></div>
             </div>
           </div>
 
           <div class="card">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-              <h3 style="margin:0;">📡 Active Tunnels (${tunnels.size})</h3>
-              <span style="font-size: 12px; color: #71717a;">Auto-cleans on disconnect</span>
+              <h3 style="margin: 0;">🌐 Active Tunnel Swarm</h3>
+              <span style="font-size: 12px; color: #71717a;">Protected by Master Kill Switch</span>
             </div>
             <ul>${activeList}</ul>
           </div>
@@ -161,7 +246,82 @@ const server = http.createServer((req, res) => {
     `);
   }
 
-  // 3. Identify Tunnel from Request
+  // 3. Public Landing Homepage (ZERO Active Tunnels Exposed!)
+  if (parsedUrl.pathname === '/' || parsedUrl.pathname === '/index.html') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    return res.end(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>WormHole | Instant Localhost Tunneling</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #09090b; color: #f4f4f5; margin: 0; padding: 40px 20px; }
+          .container { max-width: 740px; margin: 0 auto; }
+          .nav { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
+          .badge { background: #22c55e20; color: #4ade80; border: 1px solid #22c55e40; padding: 3px 10px; font-size: 12px; border-radius: 999px; }
+          .hero h1 { font-size: 34px; font-weight: 800; margin: 0 0 8px 0; letter-spacing: -0.5px; }
+          .hero p { color: #a1a1aa; font-size: 16px; line-height: 1.6; margin-bottom: 28px; }
+          .card { background: #121214; border: 1px solid #27272a; border-radius: 14px; padding: 24px; margin-bottom: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+          .code-box { background: #000; padding: 14px 18px; border-radius: 8px; border: 1px solid #27272a; font-family: monospace; color: #38bdf8; font-size: 15px; margin-top: 10px; display: flex; justify-content: space-between; align-items: center; }
+          .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-top: 24px; }
+          .feat-box { background: #18181b; border: 1px solid #27272a; border-radius: 10px; padding: 16px; }
+          .feat-box h4 { margin: 0 0 6px 0; font-size: 15px; color: #f4f4f5; display: flex; align-items: center; gap: 8px; }
+          .feat-box p { margin: 0; color: #a1a1aa; font-size: 13px; line-height: 1.5; }
+          .admin-link { color: #71717a; text-decoration: none; font-size: 13px; transition: color 0.2s; }
+          .admin-link:hover { color: #f4f4f5; }
+          .npm-badge { background: #cb383720; color: #ff6b6b; border: 1px solid #cb383740; padding: 4px 10px; font-size: 12px; border-radius: 6px; font-weight: 600; text-decoration: none; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="nav">
+            <span class="badge">● Cloud Relay Operational</span>
+            <div style="display: flex; gap: 12px; align-items: center;">
+              <a href="https://www.npmjs.com/package/wormhole-tunnel" target="_blank" class="npm-badge">📦 npm v1.0.0</a>
+              <a href="/admin" class="admin-link">Admin Deck 🔒</a>
+            </div>
+          </div>
+
+          <div class="hero">
+            <h1>🌀 WormHole</h1>
+            <p>Next-gen zero-config localhost tunneling & remote preview engine. Share any local development port with friends and clients across the world in 1 second.</p>
+          </div>
+
+          <div class="card">
+            <h3 style="margin-top:0; font-size: 17px;">⚡ Instant Usage (No Sign-Up Needed)</h3>
+            <div style="color: #a1a1aa; font-size: 14px;">Open your terminal in any project and run:</div>
+            <div class="code-box">
+              <span>npx wormhole-tunnel 5173</span>
+            </div>
+            <div style="color: #71717a; font-size: 12px; margin-top: 8px;">Supports Vite, React, Next.js, Express, Django, Flask, or any local port.</div>
+          </div>
+
+          <div class="features">
+            <div class="feat-box">
+              <h4>🔒 Passcode Gate</h4>
+              <p>Add <code>--pin 1234</code> to lock your tunnel behind a sleek cyberpunk 4-digit security keypad.</p>
+            </div>
+            <div class="feat-box">
+              <h4>📌 Visual Bug Notes</h4>
+              <p>Visitors can tap any element on screen to drop comments that chime live in your laptop terminal.</p>
+            </div>
+            <div class="feat-box">
+              <h4>📋 PDF Report Export</h4>
+              <p>Download professional project evaluation reports with 1-click printable PDF layouts for professors.</p>
+            </div>
+          </div>
+
+          <div style="margin-top: 40px; text-align: center; color: #52525b; font-size: 13px;">
+            WormHole Engine &bull; Developed by Ankit Dhiman &bull; MIT License
+          </div>
+        </div>
+      </body>
+      </html>
+    `);
+  }
+
+  // 4. Identify Tunnel from Request (Subpath /t/:id/ or Subdomain)
   let tunnelId = null;
   let targetPath = parsedUrl.pathname + parsedUrl.search;
 
@@ -1120,4 +1280,165 @@ function getFeedbackOverlayScript(tunnelId) {
 })();
 </script>
   `;
+}
+
+
+function renderAdminLoginPage() {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Login | WormHole Master Command</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #09090b;
+      color: #f4f4f5;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .grid-bg {
+      position: fixed;
+      inset: 0;
+      background-image: 
+        linear-gradient(rgba(239, 68, 68, 0.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(239, 68, 68, 0.05) 1px, transparent 1px);
+      background-size: 32px 32px;
+      z-index: 0;
+    }
+    .card {
+      position: relative;
+      z-index: 10;
+      background: #121214;
+      border: 1px solid #27272a;
+      border-radius: 16px;
+      padding: 36px 32px;
+      max-width: 380px;
+      width: 100%;
+      text-align: center;
+      box-shadow: 0 20px 45px rgba(0, 0, 0, 0.8);
+    }
+    .shake {
+      animation: shake 0.4s cubic-bezier(.36,.07,.19,.97) both;
+    }
+    @keyframes shake {
+      10%, 90% { transform: translate3d(-2px, 0, 0); }
+      20%, 80% { transform: translate3d(4px, 0, 0); }
+      30%, 50%, 70% { transform: translate3d(-6px, 0, 0); }
+      40%, 60% { transform: translate3d(6px, 0, 0); }
+    }
+    .badge {
+      background: #ef444420;
+      color: #f87171;
+      border: 1px solid #ef444440;
+      padding: 3px 10px;
+      font-size: 11px;
+      border-radius: 999px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      display: inline-block;
+      margin-bottom: 12px;
+    }
+    h2 { font-size: 22px; font-weight: 800; margin-bottom: 6px; }
+    p { color: #a1a1aa; font-size: 13px; line-height: 1.5; margin-bottom: 24px; }
+    input {
+      width: 100%;
+      background: #09090b;
+      border: 1px solid #3f3f46;
+      border-radius: 8px;
+      color: #f4f4f5;
+      padding: 12px 14px;
+      font-size: 15px;
+      outline: none;
+      margin-bottom: 14px;
+      transition: border-color 0.2s;
+    }
+    input:focus { border-color: #ef4444; }
+    button {
+      width: 100%;
+      background: #ef4444;
+      color: white;
+      border: none;
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:hover { background: #dc2626; }
+    .err-box {
+      color: #ef4444;
+      font-size: 13px;
+      margin-top: 12px;
+      min-height: 18px;
+      font-weight: 500;
+    }
+    .home-link {
+      display: inline-block;
+      margin-top: 20px;
+      color: #71717a;
+      text-decoration: none;
+      font-size: 12px;
+    }
+    .home-link:hover { color: #f4f4f5; }
+  </style>
+</head>
+<body>
+  <div class="grid-bg"></div>
+  <div class="card" id="loginCard">
+    <span class="badge">Master Command</span>
+    <h2>Admin Authentication</h2>
+    <p>Enter your secret master password to access the WormHole control deck.</p>
+    <form id="adminForm">
+      <input type="password" id="adminPass" placeholder="Enter master password..." autocomplete="current-password" autofocus required />
+      <button type="submit" id="btnSubmit">Unlock Command Deck &rarr;</button>
+    </form>
+    <div class="err-box" id="errBox"></div>
+    <a href="/" class="home-link">&larr; Return to Public Home</a>
+  </div>
+
+  <script>
+    document.getElementById('adminForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      const pass = document.getElementById('adminPass').value;
+      const btn = document.getElementById('btnSubmit');
+      const errBox = document.getElementById('errBox');
+      const card = document.getElementById('loginCard');
+
+      btn.disabled = true;
+      btn.innerText = 'Verifying...';
+      errBox.innerText = '';
+
+      try {
+        const res = await fetch('/api/admin-login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: pass })
+        });
+        const data = await res.json();
+        if (data.success) {
+          window.location.href = data.redirect || '/admin';
+        } else {
+          card.classList.add('shake');
+          setTimeout(() => card.classList.remove('shake'), 450);
+          errBox.innerText = data.message || 'Invalid Master Password';
+          btn.disabled = false;
+          btn.innerText = 'Unlock Command Deck →';
+        }
+      } catch (err) {
+        errBox.innerText = 'Network error connecting to auth server';
+        btn.disabled = false;
+        btn.innerText = 'Unlock Command Deck →';
+      }
+    });
+  </script>
+</body>
+</html>`;
 }
