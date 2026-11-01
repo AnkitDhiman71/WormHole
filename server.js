@@ -946,6 +946,10 @@ server.on('upgrade', (req, socket, head) => {
       wss.emit('connection', ws, req);
     });
   } else {
+    // Graceful response for non-tunnel WebSockets (e.g. Vite HMR polling) to avoid 502 Bad Gateway
+    try {
+      socket.write('HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nVite HMR not routed over tunnel\r\n');
+    } catch (e) {}
     socket.destroy();
   }
 });
@@ -1019,8 +1023,36 @@ wss.on('connection', (ws, req) => {
         if (contentType.includes('text/html')) {
           let html = bodyBuffer.toString('utf-8');
 
-          // Inject <base> tag and SPA routing helper so React Router paths resolve cleanly
-          const bridgeScript = `<script>(function(){window.__WORMHOLE_TUNNEL__="${tunnelId}";var b="/t/${tunnelId}";if(window.location.pathname===b){window.location.replace(b+"/"+window.location.search+window.location.hash);}})();</script>`;
+          // Inject <base> tag and SPA routing helper so React Router paths resolve cleanly without white screen
+          const bridgeScript = `
+<script>
+(function() {
+  window.__WORMHOLE_TUNNEL__ = "${tunnelId}";
+  var prefix = "/t/${tunnelId}";
+
+  // Zero-Config SPA Routing: Normalize history so React Router matches '/' instead of blank white screen
+  try {
+    if (window.location.pathname === prefix || window.location.pathname === prefix + "/") {
+      window.history.replaceState({ wormholeTunnel: "${tunnelId}" }, "", "/" + window.location.search + window.location.hash);
+    } else if (window.location.pathname.startsWith(prefix + "/")) {
+      var sub = window.location.pathname.slice(prefix.length) || "/";
+      window.history.replaceState({ wormholeTunnel: "${tunnelId}" }, "", sub + window.location.search + window.location.hash);
+    }
+  } catch(e) {}
+
+  // Keep tunnel session cookie active on SPA navigations
+  try {
+    document.cookie = "wormhole_active_tunnel=${tunnelId}; Path=/; SameSite=Lax; Max-Age=86400";
+    var origPush = window.history.pushState;
+    if (origPush) {
+      window.history.pushState = function() {
+        document.cookie = "wormhole_active_tunnel=${tunnelId}; Path=/; SameSite=Lax; Max-Age=86400";
+        return origPush.apply(this, arguments);
+      };
+    }
+  } catch(e) {}
+})();
+</script>`;
           if (html.includes('<head>')) {
             html = html.replace('<head>', `<head><base href="/t/${tunnelId}/">${bridgeScript}`);
           } else if (html.includes('<head ')) {
