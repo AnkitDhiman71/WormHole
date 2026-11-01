@@ -3,6 +3,15 @@
   "version": "1.0.0",
   "description": "Zero-config localhost tunneling & preview engine for developers",
   "main": "client.js",
+  "preferGlobal": true,
+  "files": [
+    "client.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=16.0.0"
+  },
   "bin": {
     "wormhole-tunnel": "client.js",
     "wormhole": "client.js"

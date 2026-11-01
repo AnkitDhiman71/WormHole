@@ -5,7 +5,46 @@ const fs = require('fs');
 
 // Parse CLI flags
 const args = process.argv.slice(2);
+
+if (args.includes('--help') || args.includes('-h')) {
+  console.log(`
+  🌀 WormHole CLI - Instant Localhost Tunneling & Remote Preview Engine
+
+  USAGE:
+    $ npx wormhole-tunnel <port> [options]
+    $ wormhole <port> [options]
+
+  EXAMPLES:
+    $ wormhole 5173
+    $ wormhole 3000 --name my-portfolio
+    $ wormhole 8080 --pin 1234
+    $ wormhole 5000 --name api-server --pin 9999
+
+  OPTIONS:
+    <port>            Local port to expose (e.g. 3000, 5173, 8080)
+    -n, --name <slug> Custom tunnel name / subdomain
+    --pin <passcode>  4-digit security PIN for passcode-protected preview
+    -s, --server <url> Custom relay server URL (default: official cloud relay)
+    -v, --version     Show WormHole CLI version
+    -h, --help        Show this help guide
+
+  FEATURES:
+    ✔ Zero configuration & no accounts required
+    ✔ Real-time HTTP method, status & latency telemetry
+    ✔ Injected Visual Bug Reporter & Sticky Notes tool
+    ✔ Exportable Teacher / Project Evaluation Report (with PDF print)
+    ✔ Dual IPv4 / IPv6 localhost resolution (Vite & React ready)
+  `);
+  process.exit(0);
+}
+
+if (args.includes('--version') || args.includes('-v')) {
+  console.log('v1.0.0');
+  process.exit(0);
+}
+
 let targetPort = 3000;
+let userProvidedPort = false;
 let serverUrl = process.env.WORMHOLE_SERVER || 'https://wormhole-c66l.onrender.com';
 let requestedName = '';
 let pin = '';
@@ -13,6 +52,7 @@ let pin = '';
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--port' || args[i] === '-p') {
     targetPort = parseInt(args[++i], 10) || 3000;
+    userProvidedPort = true;
   } else if (args[i] === '--server' || args[i] === '-s') {
     serverUrl = args[++i];
   } else if (args[i] === '--name' || args[i] === '-n') {
@@ -21,6 +61,7 @@ for (let i = 0; i < args.length; i++) {
     pin = args[++i];
   } else if (!isNaN(parseInt(args[i], 10))) {
     targetPort = parseInt(args[i], 10);
+    userProvidedPort = true;
   }
 }
 
