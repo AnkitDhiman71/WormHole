@@ -907,6 +907,7 @@ const server = http.createServer((req, res) => {
       body: rawBody.toString('base64'),
     };
 
+    // Generous 90s timeout for heavy Vite cold-starts (transferring 10+ MB of unbundled JS)
     const timeout = setTimeout(() => {
       if (pendingRequests.has(requestId)) {
         pendingRequests.delete(requestId);
@@ -915,7 +916,7 @@ const server = http.createServer((req, res) => {
           res.end('WormHole: 504 Gateway Timeout (Local server took too long to reply)');
         }
       }
-    }, 30000);
+    }, 90000);
 
     pendingRequests.set(requestId, {
       res,
