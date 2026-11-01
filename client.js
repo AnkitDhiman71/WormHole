@@ -122,6 +122,16 @@ function connect() {
         const logEntry = `[${timestamp || new Date().toISOString()}] Target: ${selector || 'element'} | Screen: ${screen || ''} | Comment: "${comment || ''}"\n`;
         try {
           fs.appendFileSync('feedback.log', logEntry);
+
+          let allReports = [];
+          try {
+            if (fs.existsSync('wormhole-reports.json')) {
+              allReports = JSON.parse(fs.readFileSync('wormhole-reports.json', 'utf8') || '[]');
+            }
+          } catch (e) {}
+          allReports.push({ id: allReports.length + 1, selector, text, screen, comment, timestamp: timestamp || new Date().toLocaleTimeString(), date: new Date().toLocaleDateString() });
+          fs.writeFileSync('wormhole-reports.json', JSON.stringify(allReports, null, 2));
+          console.log(`  ${colors.dim}📁 Saved to feedback.log and wormhole-reports.json${colors.reset}\n`);
         } catch (e) {}
         return;
       }

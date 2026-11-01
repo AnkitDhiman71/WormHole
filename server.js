@@ -685,17 +685,23 @@ function getFeedbackOverlayScript(tunnelId) {
   shadow.innerHTML = \`
     <style>
       * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-      .pill {
+      .pill-container {
         position: fixed;
         bottom: 24px;
         right: 24px;
         z-index: 2147483647;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        user-select: none;
+      }
+      .pill {
         background: #18181b;
         color: #f4f4f5;
         border: 1px solid #22c55e80;
         box-shadow: 0 8px 32px rgba(0,0,0,0.5), 0 0 15px rgba(34,197,94,0.3);
         border-radius: 9999px;
-        padding: 10px 18px;
+        padding: 10px 16px;
         display: flex;
         align-items: center;
         gap: 8px;
@@ -703,7 +709,6 @@ function getFeedbackOverlayScript(tunnelId) {
         font-weight: 600;
         cursor: pointer;
         transition: all 0.2s cubic-bezier(0.4,0,0.2,1);
-        user-select: none;
       }
       .pill:hover {
         transform: translateY(-2px);
@@ -715,6 +720,13 @@ function getFeedbackOverlayScript(tunnelId) {
         color: #09090b;
         border-color: #22c55e;
         box-shadow: 0 0 25px rgba(34,197,94,0.8);
+      }
+      .pill-export {
+        border-color: #38bdf880;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.5), 0 0 15px rgba(56,189,248,0.3);
+      }
+      .pill-export:hover {
+        box-shadow: 0 12px 36px rgba(0,0,0,0.6), 0 0 22px rgba(56,189,248,0.5);
       }
       .dot {
         width: 8px;
@@ -730,13 +742,22 @@ function getFeedbackOverlayScript(tunnelId) {
         0%, 100% { opacity: 1; transform: scale(1); }
         50% { opacity: 0.5; transform: scale(1.4); }
       }
+      .count-badge {
+        background: #22c55e20;
+        color: #4ade80;
+        border: 1px solid #22c55e40;
+        border-radius: 999px;
+        font-size: 11px;
+        padding: 1px 6px;
+        margin-left: 2px;
+      }
       .modal {
         display: none;
         position: fixed;
         bottom: 80px;
         right: 24px;
         z-index: 2147483647;
-        width: 320px;
+        width: 330px;
         background: #18181b;
         border: 1px solid #27272a;
         border-radius: 14px;
@@ -771,7 +792,7 @@ function getFeedbackOverlayScript(tunnelId) {
       }
       textarea {
         width: 100%;
-        height: 75px;
+        height: 80px;
         background: #09090b;
         border: 1px solid #3f3f46;
         border-radius: 8px;
@@ -792,7 +813,7 @@ function getFeedbackOverlayScript(tunnelId) {
       }
       button {
         border: none;
-        padding: 7px 14px;
+        padding: 8px 14px;
         border-radius: 6px;
         font-size: 12px;
         font-weight: 600;
@@ -819,19 +840,25 @@ function getFeedbackOverlayScript(tunnelId) {
         font-weight: 500;
       }
     </style>
-    <div class="pill" id="fbPill">
-      <div class="dot"></div>
-      <span id="pillLabel">📌 Bug Report</span>
+    <div class="pill-container">
+      <div class="pill" id="fbPill">
+        <div class="dot"></div>
+        <span id="pillLabel">📌 Bug Report</span>
+        <span class="count-badge" id="reportCountBadge" style="display:none;">0</span>
+      </div>
+      <div class="pill pill-export" id="exportBtn" style="display:none;">
+        <span>📥 Download Report</span>
+      </div>
     </div>
     <div class="modal" id="fbModal">
-      <h4>📌 Report Issue</h4>
+      <h4>📌 Report Issue / Evaluation</h4>
       <div class="target-box" id="targetInfo">Select any element</div>
-      <textarea id="fbText" placeholder="What looks wrong? Describe issue..."></textarea>
+      <textarea id="fbText" placeholder="Describe issue, feedback, or grading remarks..."></textarea>
       <div class="btn-row" id="btnRow">
         <button class="btn-cancel" id="btnCancel">Cancel</button>
-        <button class="btn-send" id="btnSend">Send to Terminal ➔</button>
+        <button class="btn-send" id="btnSend">Send ➔</button>
       </div>
-      <div class="success-toast" id="successToast">✔ Sent to developer terminal!</div>
+      <div class="success-toast" id="successToast">✔ Recorded & sent to developer!</div>
     </div>
   \`;
 
@@ -839,8 +866,17 @@ function getFeedbackOverlayScript(tunnelId) {
   let hoveredEl = null;
   let selectedTarget = null;
 
+  // Stored reports in this evaluation session
+  let reports = [];
+  try {
+    const saved = localStorage.getItem('wormhole_eval_reports_' + tunnelId);
+    if (saved) reports = JSON.parse(saved);
+  } catch (e) {}
+
   const pill = shadow.getElementById('fbPill');
   const pillLabel = shadow.getElementById('pillLabel');
+  const exportBtn = shadow.getElementById('exportBtn');
+  const reportCountBadge = shadow.getElementById('reportCountBadge');
   const modal = shadow.getElementById('fbModal');
   const targetInfo = shadow.getElementById('targetInfo');
   const fbText = shadow.getElementById('fbText');
@@ -848,6 +884,19 @@ function getFeedbackOverlayScript(tunnelId) {
   const btnSend = shadow.getElementById('btnSend');
   const btnRow = shadow.getElementById('btnRow');
   const successToast = shadow.getElementById('successToast');
+
+  function updateExportButton() {
+    if (reports.length > 0) {
+      exportBtn.style.display = 'flex';
+      reportCountBadge.style.display = 'inline-block';
+      reportCountBadge.innerText = reports.length;
+    } else {
+      exportBtn.style.display = 'none';
+      reportCountBadge.style.display = 'none';
+    }
+  }
+
+  updateExportButton();
 
   const highlighter = document.createElement('div');
   highlighter.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483646;border:2px dashed #22c55e;box-shadow:0 0 12px rgba(34,197,94,0.5);border-radius:4px;display:none;transition:all 0.05s ease-out;';
@@ -927,15 +976,26 @@ function getFeedbackOverlayScript(tunnelId) {
     btnSend.disabled = true;
     btnSend.innerText = 'Sending...';
 
+    const reportEntry = {
+      id: reports.length + 1,
+      ...selectedTarget,
+      comment: comment,
+      timestamp: new Date().toLocaleTimeString(),
+      date: new Date().toLocaleDateString()
+    };
+
+    reports.push(reportEntry);
+    try {
+      localStorage.setItem('wormhole_eval_reports_' + tunnelId, JSON.stringify(reports));
+    } catch (e) {}
+
+    updateExportButton();
+
     try {
       await fetch('/api/feedback/' + tunnelId, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...selectedTarget,
-          comment: comment,
-          timestamp: new Date().toLocaleTimeString()
-        })
+        body: JSON.stringify(reportEntry)
       });
 
       btnRow.style.display = 'none';
@@ -944,13 +1004,118 @@ function getFeedbackOverlayScript(tunnelId) {
         modal.style.display = 'none';
         highlighter.style.display = 'none';
         btnSend.disabled = false;
-        btnSend.innerText = 'Send to Terminal ➔';
-      }, 1400);
+        btnSend.innerText = 'Send ➔';
+      }, 1200);
     } catch (err) {
-      alert('Failed to send feedback: ' + err.message);
+      alert('Sent locally, but terminal ping failed: ' + err.message);
+      modal.style.display = 'none';
       btnSend.disabled = false;
-      btnSend.innerText = 'Send to Terminal ➔';
     }
+  });
+
+  // Export & Download Formal Evaluation Report (HTML / Printable PDF)
+  exportBtn.addEventListener('click', () => {
+    if (reports.length === 0) return;
+
+    const rowsHtml = reports.map(r => \`
+      <tr>
+        <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; font-weight: bold; color: #475569;">#\${r.id}</td>
+        <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; font-family: monospace; color: #0284c7; font-size: 13px;">
+          \${r.selector} \${r.text ? '<div style="color: #64748b; font-size: 11px;">("' + r.text + '")</div>' : ''}
+        </td>
+        <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; color: #1e293b; font-size: 14px; font-weight: 500;">
+          \${r.comment}
+        </td>
+        <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; color: #64748b; font-size: 12px;">\${r.screen}</td>
+        <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; color: #64748b; font-size: 12px;">\${r.timestamp}</td>
+      </tr>
+    \`).join('');
+
+    const fullReportHtml = \`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>WormHole Project Evaluation Report - \${tunnelId}</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8fafc; color: #0f172a; margin: 0; padding: 40px 20px; }
+    .container { max-width: 900px; margin: 0 auto; background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 36px; box-shadow: 0 10px 25px rgba(0,0,0,0.05); }
+    .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #0f172a; padding-bottom: 20px; margin-bottom: 24px; }
+    h1 { font-size: 26px; margin: 0 0 6px 0; color: #0f172a; }
+    .badge { background: #22c55e20; color: #15803d; border: 1px solid #22c55e40; padding: 4px 10px; font-size: 12px; font-weight: bold; border-radius: 99px; }
+    .meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; background: #f1f5f9; padding: 18px; border-radius: 8px; margin-bottom: 28px; font-size: 13px; }
+    .meta-item strong { display: block; color: #64748b; margin-bottom: 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+    table { width: 100%; border-collapse: collapse; text-align: left; }
+    th { background: #f8fafc; padding: 12px; border-bottom: 2px solid #cbd5e1; font-size: 12px; text-transform: uppercase; color: #475569; letter-spacing: 0.5px; }
+    .btn-print { background: #0f172a; color: white; border: none; padding: 10px 20px; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 13px; transition: 0.2s; }
+    .btn-print:hover { background: #334155; }
+    @media print {
+      body { background: white; padding: 0; }
+      .container { border: none; box-shadow: none; padding: 0; }
+      .btn-print { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div>
+        <h1>📋 Project Evaluation & Bug Report</h1>
+        <div style="color: #64748b; font-size: 14px;">Generated via <strong>WormHole Preview Engine</strong></div>
+      </div>
+      <button class="btn-print" onclick="window.print()">🖨️ Print / Save as PDF</button>
+    </div>
+
+    <div class="meta-grid">
+      <div class="meta-item">
+        <strong>Target Tunnel</strong>
+        \${tunnelId}
+      </div>
+      <div class="meta-item">
+        <strong>Total Remarks / Issues</strong>
+        <span class="badge">\${reports.length} Findings</span>
+      </div>
+      <div class="meta-item">
+        <strong>Evaluation Date</strong>
+        \${new Date().toLocaleDateString()}
+      </div>
+      <div class="meta-item">
+        <strong>Evaluator Device</strong>
+        \${navigator.userAgent.slice(0, 40)}...
+      </div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Inspected Element</th>
+          <th>Evaluator Remarks / Bug Description</th>
+          <th>Device Viewport</th>
+          <th>Time</th>
+        </tr>
+      </thead>
+      <tbody>
+        \${rowsHtml}
+      </tbody>
+    </table>
+
+    <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #e2e8f0; display: flex; justify-content: space-between; color: #94a3b8; font-size: 12px;">
+      <span>Verified by WormHole Audit Engine</span>
+      <span>Official Evaluation Document</span>
+    </div>
+  </div>
+</body>
+</html>\`;
+
+    const blob = new Blob([fullReportHtml], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'WormHole-Evaluation-Report-' + tunnelId + '.html';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   });
 })();
 </script>
